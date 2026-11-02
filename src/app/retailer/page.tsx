@@ -1,14 +1,18 @@
 import { requireRole } from '@/lib/auth/require-role'
+import { getCurrentUserWithRole } from '@/lib/auth/session'
+import { prisma } from '@/db'
+import { addCartProduct } from '@/app/actions/cart'
 import { Button } from '@/components/ui/button'
 import { signOut } from '@/app/actions/auth'
 import { Badge } from '@/components/ui/badge'
+import { CatalogueProducts } from './catalogue-client'
+import { getCartForRetailer } from '@/lib/cart-service'
 import {
-  formatPaise,
-  formatScheme,
-  formatUnit,
   getCatalogueProducts,
   parseCatalogueQuery,
 } from '@/lib/catalogue'
+
+export const instant = false
 
 export default async function RetailerPage({
   searchParams,
@@ -18,6 +22,14 @@ export default async function RetailerPage({
   const { user } = await requireRole('RETAILER')
   const query = parseCatalogueQuery(await searchParams)
   const products = await getCatalogueProducts(query)
+  const currentUser = await getCurrentUserWithRole()
+  const retailer = currentUser
+    ? await prisma.user.findUnique({
+        where: { authSubject: currentUser.user.id },
+        select: { id: true },
+      })
+    : null
+  const cart = retailer ? (await getCartForRetailer(retailer.id)).view : null
 
   return (
     <main className="flex flex-1 flex-col p-8 max-w-2xl mx-auto gap-6">
@@ -96,68 +108,11 @@ export default async function RetailerPage({
       </section>
 
       <section aria-labelledby="catalogue-heading">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 id="catalogue-heading" className="text-lg font-semibold">
-            Catalogue
-          </h2>
-          <p className="text-sm text-zinc-500">{products.length} products</p>
-        </div>
-        {products.length === 0 ? (
-          <p className="rounded-lg border border-dashed p-6 text-sm text-zinc-500">
-            No products match your filters.
-          </p>
-        ) : (
-          <div className="grid gap-4 md:grid-cols-2">
-            {products.map((product) => (
-              <article
-                key={product.sku}
-                className="rounded-lg border border-zinc-200 p-5 dark:border-zinc-800"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h3 className="font-semibold">{product.name}</h3>
-                    <p className="text-sm text-zinc-500">{product.sku}</p>
-                  </div>
-                  <Badge variant="secondary">{formatUnit(product.sellingUnit)}</Badge>
-                </div>
-                <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <dt className="text-zinc-500">Price</dt>
-                    <dd className="font-medium">{formatPaise(product.pricePaise)}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-zinc-500">Price basis</dt>
-                    <dd>{product.priceBasis.toLowerCase()}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-zinc-500">Pack</dt>
-                    <dd>
-                      {product.packSize} {formatUnit(product.packUnit)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-zinc-500">Stock</dt>
-                    <dd>
-                      {product.inventoryQty} {formatUnit(product.inventoryUnit)}
-                    </dd>
-                  </div>
-                </dl>
-                {product.schemes.length > 0 ? (
-                  <div className="mt-4 rounded-md bg-zinc-50 p-3 text-sm dark:bg-zinc-900">
-                    <p className="font-medium">Active scheme</p>
-                    {product.schemes.map((scheme) => (
-                      <p key={scheme.id} className="text-zinc-500">
-                        {formatScheme(scheme, product.sellingUnit)}
-                      </p>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-4 text-sm text-zinc-500">No active scheme</p>
-                )}
-              </article>
-            ))}
-          </div>
-        )}
+        <CatalogueProducts
+          products={products}
+          initialCartCount={cart?.lines.length ?? 0}
+          addProductAction={addCartProduct}
+        />
       </section>
     </main>
   )

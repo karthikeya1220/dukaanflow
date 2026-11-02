@@ -96,6 +96,15 @@ async function loginAs(
   return link
 }
 
+async function resetRetailerCart(page: Page) {
+  await page.goto('/retailer/cart')
+  const clearButton = page.getByRole('button', { name: 'Clear cart' })
+  if (await clearButton.isVisible()) {
+    await clearButton.click()
+    await expect(page.getByText('Your cart is empty')).toBeVisible()
+  }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 test.describe('M1 Authentication & RBAC', () => {
@@ -273,5 +282,77 @@ test.describe('M1 Authentication & RBAC', () => {
       },
     ).toPass({ timeout: 10_000 })
     await expect(await authUserExists('unknown@example.test')).toBe(false)
+  })
+})
+
+test.describe('M3 Retailer cart UI', () => {
+  test.beforeEach(async () => {
+    await clearMailpit()
+  })
+
+  test('retailer can add, persist, update, and remove a cart line', async ({ page }) => {
+    await loginAs(page, RETAILER_EMAIL, { fresh: true })
+    await resetRetailerCart(page)
+    await page.goto('/retailer')
+
+    await expect(page.getByTestId('catalogue-client')).toHaveAttribute('data-hydrated', 'true')
+    await page.fill('#quantity-SKU-BS-075', '10')
+    await page.getByTestId('add-to-cart-SKU-BS-075').click()
+    await expect(page.getByText('Glucose biscuit, 75 g')).toBeVisible()
+    await expect(page.getByTestId('cart-link')).toContainText('Cart (1)')
+
+    await page.goto('/retailer/cart')
+    await expect(page.getByRole('heading', { name: 'Your cart' })).toBeVisible()
+    await expect(page.getByText('Buy 10 case and get 1 free')).toBeVisible()
+    await expect(page.getByText('Free: 1')).toBeVisible()
+    await expect(page.getByText('Provisional total', { exact: true }).first()).toBeVisible()
+    await expect(page.getByText('price basis is unconfirmed')).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByText('Paid: 10')).toBeVisible()
+
+    await page.fill('input[id^="cart-quantity-"]', '12')
+    await page.getByRole('button', { name: 'Update quantity' }).click()
+    await expect(page.getByText('Paid: 12')).toBeVisible()
+    await expect(page.getByText('Free: 1')).toBeVisible()
+
+    await page.getByRole('button', { name: 'Remove' }).click()
+    await expect(page.getByText('Your cart is empty')).toBeVisible()
+  })
+
+  test('empty cart and clear cart states are available', async ({ page }) => {
+    await loginAs(page, RETAILER_EMAIL, { fresh: true })
+    await resetRetailerCart(page)
+    await expect(page.getByText('Your cart is empty')).toBeVisible()
+    await page.getByRole('link', { name: 'Browse catalogue' }).click()
+    await expect(page).toHaveURL(/\/retailer$/)
+
+    await page.getByTestId('add-to-cart-SKU-DT-1KG').click()
+    await page.goto('/retailer/cart')
+    await expect(page.getByRole('button', { name: 'Clear cart' })).toBeVisible()
+    await page.getByRole('button', { name: 'Clear cart' }).click()
+    await expect(page.getByText('Your cart is empty')).toBeVisible()
+  })
+
+  test('zero-stock tea remains visible and cannot be confirmed', async ({ page }) => {
+    await loginAs(page, RETAILER_EMAIL, { fresh: true })
+    await resetRetailerCart(page)
+    await page.goto('/retailer')
+    await page.getByTestId('add-to-cart-SKU-TE-250').click()
+    await expect(page.getByText(/added to cart\./)).toBeVisible()
+    await page.goto('/retailer/cart')
+    await expect(page.getByText('Out of stock')).toBeVisible()
+    await expect(page.getByText(/Confirmation is unavailable/)).toBeVisible()
+    await expect(page.getByTestId('confirm-cart')).toBeDisabled()
+  })
+
+  test('order desk and unauthenticated users cannot access the cart', async ({ page }) => {
+    await loginAs(page, DESK_EMAIL, { fresh: true })
+    const deskResponse = await page.goto('/retailer/cart')
+    expect(deskResponse?.status()).toBe(403)
+
+    await page.context().clearCookies()
+    await page.goto('/retailer/cart')
+    await expect(page).toHaveURL(/\/login/)
   })
 })

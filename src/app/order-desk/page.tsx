@@ -3,6 +3,8 @@ import { Button } from '@/components/ui/button'
 import { signOut } from '@/app/actions/auth'
 import { Badge } from '@/components/ui/badge'
 
+export const instant = false
+
 export default async function OrderDeskPage() {
   const { user } = await requireRole('ORDER_DESK')
 

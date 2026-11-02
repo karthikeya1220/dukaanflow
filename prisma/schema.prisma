@@ -34,6 +34,11 @@ enum SchemeKind {
   THRESHOLD_PERCENT
 }
 
+enum CartStatus {
+  ACTIVE
+  CONFIRMED
+}
+
 model User {
   id          String   @id @default(cuid())
   authSubject String   @unique
@@ -41,6 +46,7 @@ model User {
   role        UserRole
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  cart        Cart?
 }
 
 model Product {
@@ -59,6 +65,7 @@ model Product {
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   schemes       Scheme[]
+  cartLines     CartLine[]
 
   @@index([isActive, name])
 }
@@ -76,4 +83,31 @@ model Scheme {
 
   @@unique([productId, kind])
   @@index([productId, isActive])
+}
+
+model Cart {
+  id                   String     @id @default(cuid())
+  retailerId           String     @unique
+  status               CartStatus @default(ACTIVE)
+  confirmedAt          DateTime?
+  confirmedFingerprint String?
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+  retailer             User       @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  lines                CartLine[]
+}
+
+model CartLine {
+  id        String   @id @default(cuid())
+  cartId    String
+  productId String
+  quantity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([cartId, productId])
+  @@index([cartId])
+  @@index([productId])
 }
