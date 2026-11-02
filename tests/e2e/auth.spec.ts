@@ -107,6 +107,40 @@ test.describe('M1 Authentication & RBAC', () => {
     await loginAs(page, RETAILER_EMAIL)
     await expect(page).toHaveURL(/\/retailer/)
     await expect(page.getByRole('heading', { name: 'Retailer Portal' })).toBeVisible()
+    await expect(page.getByText('SKU-BS-075')).toBeVisible()
+    await expect(page.getByText('SKU-DT-1KG')).toBeVisible()
+    await expect(page.getByText('SKU-TE-250')).toBeVisible()
+  })
+
+  test('Retailer catalogue displays pack, stock, price, and schemes', async ({ page }) => {
+    await loginAs(page, RETAILER_EMAIL)
+
+    await expect(page.getByText('₹8.10')).toBeVisible()
+    await expect(page.getByText('96 pack')).toBeVisible()
+    await expect(page.getByText('340 case')).toBeVisible()
+    await expect(page.getByText('Buy 10 case and get 1 free')).toBeVisible()
+    await expect(page.getByText('3.00% off from 5 case')).toBeVisible()
+    await expect(page.getByText('unconfirmed').first()).toBeVisible()
+  })
+
+  test('Retailer catalogue searches by SKU and filters by stock and scheme', async ({
+    page,
+  }) => {
+    await loginAs(page, RETAILER_EMAIL)
+
+    await page.fill('#catalogue-search', 'SKU-TE-250')
+    await page.selectOption('#catalogue-stock', 'out-of-stock')
+    await page.click('button:has-text("Filter")')
+
+    await expect(page).toHaveURL(/q=SKU-TE-250/)
+    await expect(page.getByText('SKU-TE-250')).toBeVisible()
+    await expect(page.getByText('SKU-BS-075')).not.toBeVisible()
+    await expect(page.getByText('SKU-DT-1KG')).not.toBeVisible()
+
+    await page.goto('/retailer?scheme=with-scheme')
+    await expect(page.getByText('SKU-BS-075')).toBeVisible()
+    await expect(page.getByText('SKU-DT-1KG')).toBeVisible()
+    await expect(page.getByText('SKU-TE-250')).not.toBeVisible()
   })
 
   test('Order-desk login → lands on /order-desk', async ({ page }) => {

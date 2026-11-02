@@ -17,6 +17,23 @@ enum UserRole {
   ORDER_DESK
 }
 
+enum ProductUnit {
+  PIECE
+  PACK
+  CASE
+}
+
+enum PriceBasis {
+  UNCONFIRMED
+  PER_PACK
+  PER_CASE
+}
+
+enum SchemeKind {
+  BUY_X_GET_Y
+  THRESHOLD_PERCENT
+}
+
 model User {
   id          String   @id @default(cuid())
   authSubject String   @unique
@@ -24,4 +41,39 @@ model User {
   role        UserRole
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model Product {
+  id            String      @id @default(cuid())
+  sku           String      @unique
+  name          String
+  description   String?
+  pricePaise    Int
+  priceBasis    PriceBasis  @default(UNCONFIRMED)
+  packSize      Int
+  packUnit      ProductUnit
+  sellingUnit   ProductUnit
+  inventoryQty  Int
+  inventoryUnit ProductUnit
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  schemes       Scheme[]
+
+  @@index([isActive, name])
+}
+
+model Scheme {
+  id          String     @id @default(cuid())
+  productId   String
+  kind        SchemeKind
+  buyQty      Int?
+  freeQty     Int?
+  minQty      Int?
+  discountBps Int?
+  isActive    Boolean    @default(true)
+  product     Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, kind])
+  @@index([productId, isActive])
 }

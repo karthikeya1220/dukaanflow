@@ -5,6 +5,7 @@
 // Run: npm run db:seed
 import "dotenv/config";
 import { prisma } from "../src/db";
+import { z } from "zod";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -13,6 +14,84 @@ const DEMO_USERS = [
   { email: "retailer@dukaanflow.test", role: "RETAILER" as const },
   { email: "desk@dukaanflow.test", role: "ORDER_DESK" as const },
 ];
+
+const DEMO_PRODUCTS = [
+  {
+    sku: "SKU-BS-075",
+    name: "Glucose biscuit, 75 g",
+    pricePaise: 810,
+    priceBasis: "UNCONFIRMED" as const,
+    packSize: 96,
+    packUnit: "PACK" as const,
+    sellingUnit: "CASE" as const,
+    inventoryQty: 340,
+    inventoryUnit: "CASE" as const,
+    scheme: {
+      kind: "BUY_X_GET_Y" as const,
+      buyQty: 10,
+      freeQty: 1,
+    },
+  },
+  {
+    sku: "SKU-DT-1KG",
+    name: "Detergent powder, 1 kg",
+    pricePaise: 10150,
+    priceBasis: "UNCONFIRMED" as const,
+    packSize: 20,
+    packUnit: "PACK" as const,
+    sellingUnit: "CASE" as const,
+    inventoryQty: 85,
+    inventoryUnit: "CASE" as const,
+    scheme: {
+      kind: "THRESHOLD_PERCENT" as const,
+      minQty: 5,
+      discountBps: 300,
+    },
+  },
+  {
+    sku: "SKU-TE-250",
+    name: "Tea leaf, 250 g",
+    pricePaise: 11800,
+    priceBasis: "UNCONFIRMED" as const,
+    packSize: 40,
+    packUnit: "PACK" as const,
+    sellingUnit: "CASE" as const,
+    inventoryQty: 0,
+    inventoryUnit: "CASE" as const,
+    scheme: null,
+  },
+] as const;
+
+const buyXGetYSchemeSchema = z.object({
+  kind: z.literal("BUY_X_GET_Y"),
+  buyQty: z.number().int().positive(),
+  freeQty: z.number().int().positive(),
+}).strict();
+
+const thresholdPercentSchemeSchema = z.object({
+  kind: z.literal("THRESHOLD_PERCENT"),
+  minQty: z.number().int().positive(),
+  discountBps: z.number().int().positive().max(10_000),
+}).strict();
+
+const productFixtureSchema = z.object({
+  sku: z.string().min(1),
+  name: z.string().min(1),
+  pricePaise: z.number().int().nonnegative(),
+  priceBasis: z.enum(["UNCONFIRMED", "PER_PACK", "PER_CASE"]),
+  packSize: z.number().int().positive(),
+  packUnit: z.enum(["PIECE", "PACK", "CASE"]),
+  sellingUnit: z.enum(["PIECE", "PACK", "CASE"]),
+  inventoryQty: z.number().int().nonnegative(),
+  inventoryUnit: z.enum(["PIECE", "PACK", "CASE"]),
+  scheme: z.union([
+    buyXGetYSchemeSchema,
+    thresholdPercentSchemeSchema,
+    z.null(),
+  ]),
+}).strict();
+
+const validatedProducts = z.array(productFixtureSchema).length(3).parse(DEMO_PRODUCTS);
 
 if (!SUPABASE_URL || !SERVICE_ROLE_KEY) {
   console.error("seed FAILED: NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set (see .env.example)");
@@ -62,6 +141,51 @@ async function main() {
       update: { email: demo.email, role: demo.role },
     });
     console.log(`seed: ${demo.email} (${demo.role}) auth=${existed ? "existing" : "created"} public.users=upserted`);
+  }
+
+  for (const product of validatedProducts) {
+    const saved = await prisma.product.upsert({
+      where: { sku: product.sku },
+      create: {
+        sku: product.sku,
+        name: product.name,
+        pricePaise: product.pricePaise,
+        priceBasis: product.priceBasis,
+        packSize: product.packSize,
+        packUnit: product.packUnit,
+        sellingUnit: product.sellingUnit,
+        inventoryQty: product.inventoryQty,
+        inventoryUnit: product.inventoryUnit,
+        schemes: product.scheme
+          ? { create: { ...product.scheme } }
+          : undefined,
+      },
+      update: {
+        name: product.name,
+        pricePaise: product.pricePaise,
+        priceBasis: product.priceBasis,
+        packSize: product.packSize,
+        packUnit: product.packUnit,
+        sellingUnit: product.sellingUnit,
+        inventoryQty: product.inventoryQty,
+        inventoryUnit: product.inventoryUnit,
+        isActive: true,
+      },
+    });
+
+    if (product.scheme) {
+      await prisma.scheme.upsert({
+        where: {
+          productId_kind: { productId: saved.id, kind: product.scheme.kind },
+        },
+        create: { productId: saved.id, ...product.scheme },
+        update: { ...product.scheme, isActive: true },
+      });
+    } else {
+      await prisma.scheme.deleteMany({ where: { productId: saved.id } });
+    }
+
+    console.log(`seed: ${product.sku} product=upserted scheme=${product.scheme?.kind ?? "none"}`);
   }
   console.log("seed OK");
 }
