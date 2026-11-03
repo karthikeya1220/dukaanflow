@@ -6,6 +6,20 @@ import { Button } from '@/components/ui/button'
 import { reviewOrder } from '@/app/actions/order'
 import { formatPaise } from '@/lib/catalogue-format'
 import type { OrderView } from '@/lib/order-service'
+import {
+  FileSpreadsheet,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  Download,
+  AlertCircle,
+  ShieldAlert,
+  Search,
+  Check,
+  Ban,
+  Layers,
+  Sparkles
+} from 'lucide-react'
 
 interface OrderDeskClientProps {
   initialOrders: OrderView[]
@@ -19,6 +33,7 @@ export function OrderDeskClient({
   const [orders, setOrders] = useState<OrderView[]>(initialOrders)
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL')
   const [typeFilter, setTypeFilter] = useState<'ALL' | 'COMMERCIAL' | 'SIMULATION'>('ALL')
+  const [searchQuery, setSearchQuery] = useState('')
   const [activeOrder, setActiveOrder] = useState<OrderView | null>(orders[0] || null)
   const [isPending, startTransition] = useTransition()
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
@@ -27,6 +42,13 @@ export function OrderDeskClient({
     if (selectedStatus !== 'ALL' && order.status !== selectedStatus) return false
     if (typeFilter === 'COMMERCIAL' && order.isSimulation) return false
     if (typeFilter === 'SIMULATION' && !order.isSimulation) return false
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      const matchId = order.id.toLowerCase().includes(q)
+      const matchEmail = (order.retailerEmail ?? '').toLowerCase().includes(q)
+      const matchSku = order.lines.some(l => l.sku.toLowerCase().includes(q) || l.productName.toLowerCase().includes(q))
+      if (!matchId && !matchEmail && !matchSku) return false
+    }
     return true
   })
 
@@ -52,51 +74,72 @@ export function OrderDeskClient({
   function getStatusBadge(status: string) {
     switch (status) {
       case 'APPROVED':
-        return <Badge className="bg-emerald-600 hover:bg-emerald-700">APPROVED</Badge>
+        return (
+          <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1 text-[11px] font-semibold">
+            <CheckCircle2 className="h-3 w-3" />
+            <span>APPROVED</span>
+          </Badge>
+        )
       case 'REJECTED':
-        return <Badge variant="destructive">REJECTED</Badge>
+        return (
+          <Badge variant="destructive" className="gap-1 text-[11px] font-semibold">
+            <XCircle className="h-3 w-3" />
+            <span>REJECTED</span>
+          </Badge>
+        )
       default:
-        return <Badge variant="secondary">SUBMITTED</Badge>
+        return (
+          <Badge variant="secondary" className="gap-1 text-[11px] font-semibold">
+            <Clock className="h-3 w-3 text-muted-foreground" />
+            <span>SUBMITTED</span>
+          </Badge>
+        )
     }
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-6">
+    <div className="flex flex-1 flex-col gap-6 font-sans">
       {/* Policy Notice if disabled */}
       {!reviewPolicyEnabled && (
         <div
           role="note"
-          className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-xs text-amber-900 dark:border-amber-800/50 dark:bg-amber-950/20 dark:text-amber-200"
+          className="rounded-xl border border-amber-300/80 bg-amber-500/10 p-4 text-xs text-amber-900 dark:border-amber-800/50 dark:bg-amber-950/20 dark:text-amber-200 flex items-start gap-3 shadow-2xs"
         >
-          <span className="font-semibold">Notice:</span> Order approvals and stock releases are currently disabled pending distributor operations policy approval. Orders can be inspected and monitored. Simulation orders are labelled with <Badge variant="outline" className="border-amber-500 text-amber-600 text-[10px] py-0 px-1 inline-block">SIMULATED</Badge> and do not modify actual inventory or appear in commercial Tally exports.
+          <ShieldAlert className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="leading-relaxed">
+            <span className="font-bold">Notice: </span>
+            Order approvals and stock releases are currently disabled pending distributor operations policy approval. Orders can be inspected and monitored. Simulation orders are labelled with <Badge variant="outline" className="border-amber-500 text-amber-700 dark:text-amber-300 text-[10px] py-0 px-1 inline-block font-semibold">SIMULATED</Badge> and do not modify actual inventory or appear in commercial Tally exports.
+          </div>
         </div>
       )}
 
-      {/* Action Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-zinc-200 bg-zinc-50/50 p-4 dark:border-zinc-800 dark:bg-zinc-900/50">
+      {/* Action and Filter Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border bg-card p-4 shadow-xs">
         <div className="flex flex-wrap items-center gap-3">
+          {/* Status buttons */}
           <div className="flex items-center gap-1.5">
-            <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Status:</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mr-1">Status:</span>
             {(['ALL', 'SUBMITTED', 'APPROVED', 'REJECTED'] as const).map((status) => (
               <Button
                 key={status}
                 size="sm"
                 variant={selectedStatus === status ? 'default' : 'outline'}
                 onClick={() => setSelectedStatus(status)}
-                className="h-8 text-xs"
+                className="h-8 text-xs font-medium"
               >
                 {status}
               </Button>
             ))}
           </div>
 
-          <div className="flex items-center gap-1.5 border-l pl-3 dark:border-zinc-800">
-            <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Kind:</span>
+          {/* Type filter */}
+          <div className="flex items-center gap-1.5 border-l border-border pl-3">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mr-1">Kind:</span>
             <Button
               size="sm"
               variant={typeFilter === 'ALL' ? 'default' : 'outline'}
               onClick={() => setTypeFilter('ALL')}
-              className="h-8 text-xs"
+              className="h-8 text-xs font-medium"
             >
               All
             </Button>
@@ -104,7 +147,7 @@ export function OrderDeskClient({
               size="sm"
               variant={typeFilter === 'COMMERCIAL' ? 'default' : 'outline'}
               onClick={() => setTypeFilter('COMMERCIAL')}
-              className="h-8 text-xs"
+              className="h-8 text-xs font-medium"
             >
               Commercial
             </Button>
@@ -112,30 +155,30 @@ export function OrderDeskClient({
               size="sm"
               variant={typeFilter === 'SIMULATION' ? 'default' : 'outline'}
               onClick={() => setTypeFilter('SIMULATION')}
-              className="h-8 text-xs"
+              className="h-8 text-xs font-medium"
             >
               Simulation
             </Button>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <Button asChild variant="outline" size="sm" className="h-8 gap-2">
+        {/* Search & Export Action */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="relative w-48 sm:w-60">
+            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              type="text"
+              placeholder="Search order or retailer..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="h-8 w-full rounded-lg border border-input bg-transparent pl-8 pr-2.5 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+            />
+          </div>
+
+          <Button asChild size="sm" className="h-8 gap-1.5 font-medium shadow-xs bg-primary hover:bg-primary/90 text-primary-foreground">
             <a href="/api/export/tally" download>
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                />
-              </svg>
-              Export Tally CSV (Commercial Only)
+              <Download className="h-3.5 w-3.5" />
+              <span>Export Tally CSV</span>
             </a>
           </Button>
         </div>
@@ -144,30 +187,36 @@ export function OrderDeskClient({
       {feedback && (
         <div
           role="alert"
-          className={`rounded-lg p-3 text-sm ${
+          className={`flex items-center gap-2 rounded-xl p-3 text-xs shadow-2xs ${
             feedback.type === 'error'
-              ? 'border border-destructive/50 bg-destructive/10 text-destructive'
-              : 'border border-emerald-500/50 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200'
+              ? 'border border-destructive/20 bg-destructive/10 text-destructive'
+              : 'border border-primary/20 bg-primary/5 text-primary'
           }`}
         >
-          {feedback.message}
+          {feedback.type === 'error' ? <AlertCircle className="h-4 w-4 shrink-0" /> : <CheckCircle2 className="h-4 w-4 shrink-0" />}
+          <span>{feedback.message}</span>
         </div>
       )}
 
-      {/* Main Grid: Queue & Detail Pane */}
+      {/* Main Grid: Orders Queue & Inspection Pane */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        {/* Left: Orders Queue (5 columns) */}
+        {/* Left Column: Orders Queue (5 columns) */}
         <div className="flex flex-col gap-3 lg:col-span-5">
-          <h2 className="text-sm font-semibold tracking-wide text-zinc-600 dark:text-zinc-400">
-            Orders Queue ({filteredOrders.length})
-          </h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+              Orders Queue ({filteredOrders.length})
+            </h2>
+            <span className="text-[11px] text-muted-foreground">Real-time incoming</span>
+          </div>
 
           {filteredOrders.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-zinc-300 p-8 text-center text-sm text-zinc-500 dark:border-zinc-800">
-              No orders found matching filter criteria.
+            <div className="rounded-2xl border border-dashed border-border bg-card p-10 text-center text-xs text-muted-foreground shadow-2xs">
+              <Layers className="mx-auto h-8 w-8 text-muted-foreground/60 mb-2" />
+              <p className="font-medium text-foreground">No orders matching criteria</p>
+              <p className="mt-0.5">Try selecting a different status or clear search filters.</p>
             </div>
           ) : (
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2.5 max-h-[750px] overflow-y-auto pr-1">
               {filteredOrders.map((order) => {
                 const isSelected = activeOrder?.id === order.id
                 return (
@@ -176,19 +225,19 @@ export function OrderDeskClient({
                     type="button"
                     onClick={() => setActiveOrder(order)}
                     data-testid={`order-queue-item-${order.id}`}
-                    className={`flex flex-col gap-2 rounded-lg border p-4 text-left transition-all ${
+                    className={`flex flex-col gap-2 rounded-xl border p-4 text-left transition-all ${
                       isSelected
-                        ? 'border-zinc-900 bg-zinc-50/80 shadow-xs dark:border-zinc-100 dark:bg-zinc-900/80'
-                        : 'border-zinc-200 hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700'
+                        ? 'border-primary/80 bg-primary/[0.04] shadow-xs ring-1 ring-primary/20'
+                        : 'border-border bg-card hover:border-border/80 hover:bg-muted/30 shadow-2xs'
                     }`}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-xs font-medium text-zinc-600 dark:text-zinc-400">
+                        <span className="font-mono text-xs font-bold text-foreground">
                           #{order.id.slice(0, 8)}
                         </span>
                         {order.isSimulation && (
-                          <Badge variant="outline" className="border-amber-500 text-amber-600 text-[10px] py-0 px-1">
+                          <Badge variant="outline" className="border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[10px] py-0 px-1 font-semibold">
                             SIMULATED
                           </Badge>
                         )}
@@ -196,13 +245,17 @@ export function OrderDeskClient({
                       {getStatusBadge(order.status)}
                     </div>
 
-                    <div className="flex items-baseline justify-between">
-                      <span className="text-sm font-medium">{order.retailerEmail ?? 'Retailer'}</span>
-                      <span className="text-sm font-semibold">{formatPaise(order.totalPaise)}</span>
+                    <div className="flex items-baseline justify-between mt-0.5">
+                      <span className="text-xs font-medium text-foreground truncate max-w-[180px]">
+                        {order.retailerEmail ?? 'Retailer'}
+                      </span>
+                      <span className="text-sm font-extrabold text-foreground">
+                        {formatPaise(order.totalPaise)}
+                      </span>
                     </div>
 
-                    <div className="flex items-center justify-between text-xs text-zinc-500">
-                      <span>{order.lines.length} items</span>
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/50 pt-2 mt-1">
+                      <span>{order.lines.length} line item{order.lines.length === 1 ? '' : 's'}</span>
                       <span>{new Date(order.submittedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                   </button>
@@ -212,24 +265,29 @@ export function OrderDeskClient({
           )}
         </div>
 
-        {/* Right: Order Detail & Actions (7 columns) */}
+        {/* Right Column: Order Detail & Actions (7 columns) */}
         <div className="flex flex-col gap-4 lg:col-span-7">
           {activeOrder ? (
-            <div className="flex flex-col gap-6 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800">
-              <div className="flex flex-wrap items-center justify-between gap-4 border-b pb-4 dark:border-zinc-800">
+            <div className="flex flex-col gap-6 rounded-2xl border border-border bg-card p-6 shadow-xs">
+              {/* Order Detail Header */}
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border/80 pb-5">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-lg font-semibold tracking-tight">Order #{activeOrder.id}</h3>
+                  <div className="flex items-center gap-2.5">
+                    <h3 className="text-lg font-bold tracking-tight text-foreground font-mono">
+                      Order #{activeOrder.id}
+                    </h3>
                     {activeOrder.isSimulation && (
-                      <Badge variant="outline" className="border-amber-500 text-amber-600">
+                      <Badge variant="outline" className="border-amber-500/60 bg-amber-500/10 text-amber-700 dark:text-amber-400 font-bold text-xs py-0.5">
+                        <Sparkles className="h-3 w-3 mr-1 inline" />
                         SIMULATED ORDER
                       </Badge>
                     )}
                   </div>
-                  <p className="text-xs text-zinc-500 mt-1">
-                    Placed by {activeOrder.retailerEmail} on {new Date(activeOrder.submittedAt).toLocaleString()}
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Placed by <strong className="text-foreground">{activeOrder.retailerEmail}</strong> on {new Date(activeOrder.submittedAt).toLocaleString()}
                   </p>
                 </div>
+
                 <div className="flex items-center gap-2">
                   {getStatusBadge(activeOrder.status)}
                   {activeOrder.status === 'SUBMITTED' && (
@@ -238,44 +296,47 @@ export function OrderDeskClient({
                         size="sm"
                         disabled={isPending || !reviewPolicyEnabled}
                         onClick={() => handleReview(activeOrder.id, 'APPROVED')}
-                        className="bg-emerald-600 hover:bg-emerald-700"
+                        className="bg-emerald-600 hover:bg-emerald-700 h-8 text-xs font-medium gap-1 text-white shadow-xs"
                         data-testid="order-approve-btn"
                       >
-                        Approve
+                        <Check className="h-3.5 w-3.5" />
+                        <span>Approve</span>
                       </Button>
                       <Button
                         size="sm"
                         variant="destructive"
                         disabled={isPending || !reviewPolicyEnabled}
                         onClick={() => handleReview(activeOrder.id, 'REJECTED')}
+                        className="h-8 text-xs font-medium gap-1 shadow-xs"
                         data-testid="order-reject-btn"
                       >
-                        Reject
+                        <Ban className="h-3.5 w-3.5" />
+                        <span>Reject</span>
                       </Button>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Order Meta details */}
-              <div className="grid grid-cols-2 gap-4 text-xs sm:grid-cols-4">
-                <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
-                  <span className="text-zinc-500">Gross Total</span>
-                  <p className="mt-1 font-semibold text-sm">{formatPaise(activeOrder.subtotalPaise)}</p>
+              {/* Order Meta details Grid */}
+              <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                <div className="rounded-xl border border-border/80 bg-muted/30 p-3.5 shadow-2xs">
+                  <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Gross Total</span>
+                  <p className="mt-1 font-bold text-sm text-foreground">{formatPaise(activeOrder.subtotalPaise)}</p>
                 </div>
-                <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
-                  <span className="text-zinc-500">Discount</span>
-                  <p className="mt-1 font-semibold text-sm text-emerald-600">
+                <div className="rounded-xl border border-border/80 bg-muted/30 p-3.5 shadow-2xs">
+                  <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Discount</span>
+                  <p className="mt-1 font-bold text-sm text-emerald-600">
                     -{formatPaise(activeOrder.discountPaise)}
                   </p>
                 </div>
-                <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
-                  <span className="text-zinc-500">Net Payable</span>
-                  <p className="mt-1 font-bold text-sm">{formatPaise(activeOrder.totalPaise)}</p>
+                <div className="rounded-xl border border-border/80 bg-muted/30 p-3.5 shadow-2xs">
+                  <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Net Amount</span>
+                  <p className="mt-1 font-extrabold text-sm text-foreground">{formatPaise(activeOrder.totalPaise)}</p>
                 </div>
-                <div className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
-                  <span className="text-zinc-500">Price Basis</span>
-                  <p className="mt-1 font-medium text-xs">
+                <div className="rounded-xl border border-border/80 bg-muted/30 p-3.5 shadow-2xs">
+                  <span className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Price Basis</span>
+                  <p className="mt-1 font-semibold text-xs text-foreground">
                     {activeOrder.priceBasisConfirmed ? 'CONFIRMED' : 'PROVISIONAL'}
                   </p>
                 </div>
@@ -283,12 +344,12 @@ export function OrderDeskClient({
 
               {/* Line items table */}
               <div>
-                <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                  Order Line Items
+                <h4 className="mb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  Order Line Items ({activeOrder.lines.length})
                 </h4>
-                <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+                <div className="overflow-x-auto rounded-xl border border-border">
                   <table className="w-full text-left text-xs">
-                    <thead className="border-b bg-zinc-50 text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+                    <thead className="border-b border-border bg-muted/50 text-muted-foreground font-semibold">
                       <tr>
                         <th className="p-3">Item / SKU</th>
                         <th className="p-3">Paid Qty</th>
@@ -297,25 +358,25 @@ export function OrderDeskClient({
                         <th className="p-3 text-right">Total</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                    <tbody className="divide-y divide-border/60">
                       {activeOrder.lines.map((line) => (
-                        <tr key={line.id}>
+                        <tr key={line.id} className="hover:bg-muted/20 transition-colors">
                           <td className="p-3">
-                            <p className="font-medium text-zinc-900 dark:text-zinc-100">{line.productName}</p>
-                            <span className="text-zinc-400 font-mono">{line.sku}</span>
+                            <p className="font-semibold text-foreground">{line.productName}</p>
+                            <span className="font-mono text-[11px] text-muted-foreground">{line.sku}</span>
                           </td>
-                          <td className="p-3">
+                          <td className="p-3 font-medium">
                             {line.paidQty} {line.sellingUnit}
                           </td>
                           <td className="p-3">
                             {line.freeQty > 0 ? (
-                              <span className="font-semibold text-emerald-600">+{line.freeQty}</span>
+                              <span className="font-bold text-emerald-600">+{line.freeQty}</span>
                             ) : (
-                              '0'
+                              <span className="text-muted-foreground">0</span>
                             )}
                           </td>
                           <td className="p-3">{formatPaise(line.unitPricePaise)}</td>
-                          <td className="p-3 text-right font-medium">{formatPaise(line.totalPaise)}</td>
+                          <td className="p-3 text-right font-bold text-foreground">{formatPaise(line.totalPaise)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -325,15 +386,17 @@ export function OrderDeskClient({
 
               {/* Rejection notice if rejected */}
               {activeOrder.rejectionReason && (
-                <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-xs text-destructive">
-                  <span className="font-semibold">Rejection Reason: </span>
+                <div className="rounded-xl border border-destructive/20 bg-destructive/10 p-4 text-xs text-destructive">
+                  <span className="font-bold">Rejection Reason: </span>
                   {activeOrder.rejectionReason}
                 </div>
               )}
             </div>
           ) : (
-            <div className="flex h-64 items-center justify-center rounded-lg border border-dashed border-zinc-300 text-sm text-zinc-500 dark:border-zinc-800">
-              Select an order from the queue to view details.
+            <div className="flex h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-border p-8 text-center text-xs text-muted-foreground bg-card shadow-2xs">
+              <FileSpreadsheet className="h-8 w-8 text-muted-foreground/60 mb-2" />
+              <p className="font-semibold text-foreground text-sm">No order selected</p>
+              <p className="mt-0.5">Select an order from the queue to view line item snapshots and trade schemes.</p>
             </div>
           )}
         </div>

@@ -9,6 +9,7 @@ import {
   applyAiItemsToCart,
 } from '@/app/actions/ai-order'
 import type { AiOrderExtractionResult, ParsedOrderItem } from '@/lib/ai-order-parser'
+import { Sparkles, X, Check, AlertTriangle, CornerDownLeft, Info, HelpCircle } from 'lucide-react'
 
 export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) {
   const [isOpen, setIsOpen] = useState(false)
@@ -59,62 +60,98 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
     })
   }
 
+  const samplePrompts = [
+    "2 carton britania biscuits aur 5 packet surf excel bhej do",
+    "10 cases Parle-G, 4 boxes Maggi noodles",
+    "5 peti Good Day butter cookies aur 3 dabba Tata Salt",
+  ]
+
   return (
     <div>
       <Button
         type="button"
-        variant="outline"
         size="sm"
         onClick={() => setIsOpen(!isOpen)}
-        className="gap-2 border-primary/30 text-primary hover:bg-primary/5"
+        className="gap-2 bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20 shadow-xs h-9 font-medium"
         data-testid="ai-order-btn"
       >
-        <span className="text-base">✨</span>
-        <span>Order with Natural Language / Voice Text</span>
+        <Sparkles className="h-4 w-4 text-primary" />
+        <span>Order with Natural Language Assist</span>
       </Button>
 
       {isOpen && (
-        <div className="mt-4 rounded-xl border border-primary/20 bg-primary/[0.02] p-5 shadow-xs dark:border-primary/30 dark:bg-primary/[0.05]">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="text-lg">✨</span>
-              <h3 className="text-base font-semibold">AI Quick Order Capture</h3>
-              <Badge variant="outline" className="text-xs">BETA</Badge>
+        <div className="mt-4 rounded-2xl border border-primary/30 bg-card p-5 sm:p-6 shadow-md transition-all animate-in fade-in-50 duration-200">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Sparkles className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold tracking-tight text-foreground">AI Quick Order Assist</h3>
+                  <Badge variant="outline" className="border-primary/40 bg-primary/5 text-primary text-[10px] py-0 px-1.5 font-semibold">
+                    HINGLISH & ENGLISH
+                  </Badge>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Natural language extraction with human-in-the-loop SKU and quantity confirmation.
+                </p>
+              </div>
             </div>
+
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setIsOpen(false)}
-              className="h-7 w-7 p-0 text-zinc-500"
+              className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
             >
-              ✕
+              <X className="h-4 w-4" />
             </Button>
           </div>
 
-          <p className="mt-1 text-xs text-zinc-500">
-            Type or paste orders in simple English or Hinglish (e.g. <em>&ldquo;10 cases Parle-G, 5 carton Good Day biscuit&rdquo;</em>).
-            Review the extracted items before confirming to your cart.
-          </p>
+          {/* Quick sample chips */}
+          <div className="mt-4">
+            <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider block mb-1.5">
+              Try an example:
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {samplePrompts.map((prompt, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setInputText(prompt)}
+                  className="rounded-md border border-border bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/40 hover:bg-primary/5 hover:text-foreground transition-all"
+                >
+                  &ldquo;{prompt}&rdquo;
+                </button>
+              ))}
+            </div>
+          </div>
 
-          <div className="mt-4 flex flex-col gap-3">
+          <div className="mt-3 flex flex-col gap-3">
             <Textarea
-              placeholder="e.g. 10 cases Parle-G, 5 peti Good Day butter cookies"
+              placeholder="e.g. 10 cases Parle-G, 5 peti Good Day butter cookies aur 3 packet Surf Excel..."
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               rows={3}
-              className="resize-none text-sm"
+              className="resize-none text-sm bg-background border-border/80 focus-visible:ring-primary/20"
               data-testid="ai-order-input"
             />
 
-            <div className="flex justify-between items-center">
-              <span className="text-xs text-zinc-400">Human review required before adding to cart.</span>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Info className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <span>Units (peti, carton, dabba, pkt) are automatically mapped to SKU pack rules.</span>
+              </div>
               <Button
                 size="sm"
                 onClick={handleParse}
                 disabled={isPending || !inputText.trim()}
                 data-testid="ai-parse-btn"
+                className="gap-1.5 h-8 font-medium shadow-xs"
               >
-                {isPending ? 'Analyzing…' : 'Extract Items'}
+                <span>{isPending ? 'Analyzing…' : 'Extract Items'}</span>
+                <CornerDownLeft className="h-3.5 w-3.5" />
               </Button>
             </div>
           </div>
@@ -123,8 +160,8 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
             <div
               className={`mt-4 rounded-lg p-3 text-xs ${
                 feedback.type === 'error'
-                  ? 'border border-destructive/50 bg-destructive/10 text-destructive'
-                  : 'border border-emerald-500/50 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200'
+                  ? 'border border-destructive/20 bg-destructive/10 text-destructive'
+                  : 'border border-primary/20 bg-primary/5 text-primary'
               }`}
             >
               {feedback.message}
@@ -133,46 +170,55 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
 
           {/* Extraction Confirmation Panel */}
           {extraction && (
-            <div className="mt-5 flex flex-col gap-4 border-t border-zinc-200 pt-4 dark:border-zinc-800">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-                Proposed Product Mappings ({extraction.items.length})
-              </h4>
+            <div className="mt-6 flex flex-col gap-4 border-t border-border/80 pt-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                    Proposed Product Mappings ({extraction.items.length})
+                  </h4>
+                  <p className="text-xs text-muted-foreground">Verify mapped SKUs and quantities before adding to your cart.</p>
+                </div>
+                <span className="text-[11px] text-muted-foreground font-mono">
+                  {extraction.items.filter(i => i.matchedProduct).length}/{extraction.items.length} matched
+                </span>
+              </div>
 
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-2.5">
                 {extraction.items.map((item: ParsedOrderItem, idx: number) => {
                   const selected = selectedItems[idx]
                   return (
                     <div
                       key={idx}
-                      className="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-white p-3 text-xs dark:border-zinc-800 dark:bg-zinc-950"
+                      className="flex flex-col gap-2 rounded-xl border border-border bg-card p-3.5 text-xs shadow-2xs"
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-zinc-500">
-                          Original input: <code className="text-zinc-800 dark:text-zinc-200">{item.rawLine}</code>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-muted-foreground">
+                          Parsed phrase: <code className="text-foreground font-semibold bg-muted/60 px-1 py-0.5 rounded">&ldquo;{item.rawLine}&rdquo;</code>
                         </span>
                         {item.matchedProduct && (
-                          <Badge variant="outline" className="border-emerald-500/50 text-emerald-600">
-                            {item.matchedProduct.confidence}% match
+                          <Badge variant="outline" className="border-primary/40 bg-primary/5 text-primary text-[10px] font-semibold">
+                            {Math.round(item.matchedProduct.confidence * 100)}% confidence
                           </Badge>
                         )}
                       </div>
 
                       {item.matchedProduct ? (
-                        <div className="flex items-center justify-between gap-4">
-                          <div>
-                            <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/40 pt-2">
+                          <div className="min-w-0 flex-1">
+                            <span className="font-semibold text-sm text-foreground block truncate">
                               {item.matchedProduct.name}
                             </span>
-                            <span className="ml-2 font-mono text-zinc-400">({item.matchedProduct.sku})</span>
+                            <span className="font-mono text-[11px] text-muted-foreground">{item.matchedProduct.sku}</span>
                             {item.unitAmbiguous && item.clarificationPrompt && (
-                              <p className="mt-0.5 text-amber-600 dark:text-amber-400 font-medium">
-                                ⚠️ {item.clarificationPrompt}
+                              <p className="mt-1 flex items-center gap-1 text-amber-700 dark:text-amber-400 font-medium text-[11px]">
+                                <AlertTriangle className="h-3 w-3 shrink-0" />
+                                <span>{item.clarificationPrompt}</span>
                               </p>
                             )}
                           </div>
 
                           <div className="flex items-center gap-2">
-                            <span className="text-zinc-500">Qty:</span>
+                            <span className="text-muted-foreground font-medium">Quantity:</span>
                             <input
                               type="number"
                               min={1}
@@ -186,21 +232,25 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
                                   },
                                 }))
                               }
-                              className="w-16 rounded border border-zinc-200 p-1 text-center dark:border-zinc-800 dark:bg-zinc-900"
+                              className="w-16 rounded-lg border border-input bg-transparent p-1.5 text-center text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
                             />
-                            <span className="font-medium text-zinc-600 dark:text-zinc-400">
+                            <span className="font-semibold text-xs text-foreground uppercase">
                               {item.extractedUnit}
                             </span>
                           </div>
                         </div>
                       ) : (
-                        <div className="text-destructive">No direct SKU match found.</div>
+                        <div className="flex items-center gap-1.5 text-destructive font-medium border-t border-border/40 pt-2">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          <span>No direct SKU match found for &ldquo;{item.extractedProductName}&rdquo;.</span>
+                        </div>
                       )}
 
                       {/* Alternatives if available */}
                       {item.alternatives.length > 0 && (
-                        <div className="mt-1 flex flex-wrap items-center gap-2 text-zinc-500">
-                          <span>Alternatives:</span>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 pt-1 text-[11px] text-muted-foreground">
+                          <HelpCircle className="h-3 w-3 opacity-70" />
+                          <span>Alternative matches:</span>
                           {item.alternatives.map((alt) => (
                             <button
                               key={alt.productId}
@@ -214,13 +264,13 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
                                   },
                                 }))
                               }
-                              className={`rounded px-2 py-0.5 border ${
+                              className={`rounded-md px-2 py-0.5 border transition-all ${
                                 selected?.productId === alt.productId
-                                  ? 'border-primary bg-primary/10 text-primary font-medium'
-                                  : 'border-zinc-200 hover:border-zinc-300 dark:border-zinc-800'
+                                  ? 'border-primary bg-primary/10 text-primary font-semibold'
+                                  : 'border-border hover:border-primary/40 text-muted-foreground'
                               }`}
                             >
-                              {alt.name} ({alt.confidence}%)
+                              {alt.name} ({Math.round(alt.confidence * 100)}%)
                             </button>
                           ))}
                         </div>
@@ -231,9 +281,9 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
               </div>
 
               {extraction.unmatchedLines.length > 0 && (
-                <div className="rounded-md border border-amber-300/40 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
-                  <span className="font-semibold">Unmatched lines:</span>
-                  <ul className="list-inside list-disc mt-1">
+                <div className="rounded-lg border border-amber-300/40 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
+                  <span className="font-semibold">Unmatched text:</span>
+                  <ul className="list-inside list-disc mt-1 text-[11px]">
                     {extraction.unmatchedLines.map((line, i) => (
                       <li key={i}>{line}</li>
                     ))}
@@ -241,12 +291,19 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
                 </div>
               )}
 
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex items-center justify-end gap-2 pt-2">
                 <Button variant="outline" size="sm" onClick={() => setExtraction(null)}>
-                  Cancel
+                  Clear
                 </Button>
-                <Button size="sm" onClick={handleApply} disabled={isPending} data-testid="ai-add-cart-btn">
-                  {isPending ? 'Adding to Cart…' : 'Confirm & Add to Cart'}
+                <Button
+                  size="sm"
+                  onClick={handleApply}
+                  disabled={isPending || Object.keys(selectedItems).length === 0}
+                  data-testid="ai-add-cart-btn"
+                  className="gap-1.5 font-medium shadow-xs"
+                >
+                  <Check className="h-4 w-4" />
+                  <span>{isPending ? 'Adding to Cart…' : 'Confirm & Add to Cart'}</span>
                 </Button>
               </div>
             </div>

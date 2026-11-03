@@ -480,6 +480,55 @@ export async function getAllOrders(filter?: {
   }))
 }
 
+export async function getOrdersForRetailer(retailerId: string): Promise<OrderView[]> {
+  const orders = await prisma.order.findMany({
+    where: { retailerId },
+    include: {
+      retailer: { select: { email: true } },
+      lines: { orderBy: { id: 'asc' } },
+    },
+    orderBy: { submittedAt: 'desc' },
+  })
+
+  return orders.map((o) => ({
+    id: o.id,
+    retailerId: o.retailerId,
+    retailerEmail: o.retailer.email,
+    cartId: o.cartId,
+    idempotencyKey: o.idempotencyKey,
+    status: o.status,
+    submittedAt: o.submittedAt,
+    updatedAt: o.updatedAt,
+    reservationExpiresAt: o.reservationExpiresAt,
+    inventoryReleasedAt: o.inventoryReleasedAt,
+    rejectionReason: o.rejectionReason,
+    reviewedByUserId: o.reviewedByUserId,
+    subtotalPaise: o.subtotalPaise,
+    discountPaise: o.discountPaise,
+    totalPaise: o.totalPaise,
+    priceBasisConfirmed: o.priceBasisConfirmed,
+    isSimulation: o.isSimulation,
+    lines: o.lines.map((l) => ({
+      id: l.id,
+      productId: l.productId,
+      sku: l.sku,
+      productName: l.productName,
+      paidQty: l.paidQty,
+      freeQty: l.freeQty,
+      reservedQty: l.reservedQty,
+      sellingUnit: l.sellingUnit,
+      inventoryUnit: l.inventoryUnit,
+      unitPricePaise: l.unitPricePaise,
+      priceBasis: l.priceBasis,
+      grossPaise: l.grossPaise,
+      discountPaise: l.discountPaise,
+      totalPaise: l.totalPaise,
+      schemeKind: l.schemeKind,
+      schemeId: l.schemeId,
+    })),
+  }))
+}
+
 /**
  * Order desk status update: APPROVE or REJECT.
  * Gated by `isOrderReviewPolicyEnabled()`.
