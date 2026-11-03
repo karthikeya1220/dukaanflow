@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { signOut } from '@/app/actions/auth'
 import { Badge } from '@/components/ui/badge'
 import { CatalogueProducts } from './catalogue-client'
+import { AiOrderModal } from './ai-order-modal'
 import { getCartForRetailer } from '@/lib/cart-service'
 import {
   getCatalogueProducts,
@@ -52,6 +53,10 @@ export default async function RetailerPage({
           </form>
         </div>
       </header>
+
+      {/* AI Quick Order Assist */}
+      <AiOrderModal />
+
       <section className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-4">
         <form className="grid gap-3 md:grid-cols-[1fr_auto_auto_auto_auto]">
           <label className="sr-only" htmlFor="catalogue-search">

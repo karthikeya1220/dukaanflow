@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { test, expect, type BrowserContext, type Page } from '@playwright/test'
+import { assertSafeTestDatabaseTarget } from '../test-database-safety'
 
 const MAILPIT_API = 'http://127.0.0.1:54324/api/v1'
 const RETAILER_EMAIL = 'retailer@dukaanflow.test'
@@ -97,6 +98,7 @@ async function loginAs(
 }
 
 async function resetRetailerCart(page: Page) {
+  assertSafeTestDatabaseTarget()
   await page.goto('/retailer/cart')
   const clearButton = page.getByRole('button', { name: 'Clear cart' })
   if (await clearButton.isVisible()) {
@@ -286,6 +288,10 @@ test.describe('M1 Authentication & RBAC', () => {
 })
 
 test.describe('M3 Retailer cart UI', () => {
+  test.beforeAll(() => {
+    assertSafeTestDatabaseTarget()
+  })
+
   test.beforeEach(async () => {
     await clearMailpit()
   })
@@ -327,7 +333,9 @@ test.describe('M3 Retailer cart UI', () => {
     await page.getByRole('link', { name: 'Browse catalogue' }).click()
     await expect(page).toHaveURL(/\/retailer$/)
 
+    await expect(page.getByTestId('catalogue-client')).toHaveAttribute('data-hydrated', 'true')
     await page.getByTestId('add-to-cart-SKU-DT-1KG').click()
+    await expect(page.getByText(/added to cart\./)).toBeVisible()
     await page.goto('/retailer/cart')
     await expect(page.getByRole('button', { name: 'Clear cart' })).toBeVisible()
     await page.getByRole('button', { name: 'Clear cart' }).click()
