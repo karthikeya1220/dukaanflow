@@ -3,19 +3,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('@/db', () => ({
   prisma: {
     $transaction: vi.fn(),
-    cart: { findUnique: vi.fn() },
+    cart: { findFirst: vi.fn() },
   },
 }))
 
 import { prisma } from '@/db'
 import {
+  createNewCart,
   fingerprintCartLines,
   getCartForRetailer,
 } from '@/lib/cart-service'
 
 const mockPrisma = prisma as unknown as {
   $transaction: ReturnType<typeof vi.fn>
-  cart: { findUnique: ReturnType<typeof vi.fn> }
+  cart: { findFirst: ReturnType<typeof vi.fn> }
 }
 
 describe('cart service', () => {
@@ -52,7 +53,7 @@ describe('cart service', () => {
   })
 
   it('runs reads through a transaction for cart retrieval', async () => {
-    const transactionClient = { cart: { findUnique: vi.fn().mockResolvedValue(null) } }
+    const transactionClient = { cart: { findFirst: vi.fn().mockResolvedValue(null) } }
     mockPrisma.$transaction.mockImplementationOnce(
       async (callback: (client: typeof transactionClient) => unknown) =>
         callback(transactionClient),
@@ -64,5 +65,16 @@ describe('cart service', () => {
 
   it('does not expose missing cart lines as current products', async () => {
     expect(fingerprintCartLines([])).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('returns CONFLICT after bounded new-cart P2002 retries are exhausted', async () => {
+    mockPrisma.$transaction
+      .mockRejectedValueOnce({ code: 'P2002' })
+      .mockRejectedValueOnce({ code: 'P2002' })
+
+    await expect(createNewCart('retailer-1')).rejects.toEqual(
+      expect.objectContaining({ code: 'CONFLICT' }),
+    )
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(2)
   })
 })

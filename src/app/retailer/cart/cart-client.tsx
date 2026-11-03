@@ -6,11 +6,13 @@ import { Badge } from '@/components/ui/badge'
 import {
   clearCart,
   confirmCart,
+  createNewCart,
   getCurrentCart,
   removeCartLine,
   updateCartLine,
   type CartActionResult,
 } from '@/app/actions/cart'
+import { submitOrder } from '@/app/actions/order'
 import { formatPaise, formatScheme, formatUnit } from '@/lib/catalogue-format'
 import type { CartView, CartViewLine } from '@/lib/cart-service'
 
@@ -74,11 +76,11 @@ function CartLineCard({
               <dd>{calculation.priceBasis.toLowerCase()}</dd>
             </div>
             <div>
-              <dt className="text-zinc-500">Current stock</dt>
+              <dt className="text-zinc-500">Indicative stock</dt>
               <dd>{product.inventoryQty} {formatUnit(product.inventoryUnit)}</dd>
             </div>
             <div>
-              <dt className="text-zinc-500">Required stock</dt>
+              <dt className="text-zinc-500">Required qty</dt>
               <dd>{calculation.requiredStockQty} {formatUnit(product.sellingUnit)}</dd>
             </div>
           </dl>
@@ -171,6 +173,11 @@ function CartLineCard({
 export function CartClient({ initialCart }: { initialCart: CartView | null }) {
   const [cart, setCart] = useState<CartView | null>(initialCart)
   const [isPending, startTransition] = useTransition()
+  const [submittedOrder, setSubmittedOrder] = useState<{
+    id: string
+    totalPaise: number
+    isSimulation?: boolean
+  } | null>(null)
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(
     initialCart?.stale
       ? {
@@ -229,6 +236,28 @@ export function CartClient({ initialCart }: { initialCart: CartView | null }) {
         )}
         {feedback?.type === 'error' && <p role="alert" className="text-destructive">{feedback.message}</p>}
       </div>
+      {submittedOrder && (
+        <div
+          data-testid="submitted-order-banner"
+          className="rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-semibold text-primary">
+                {submittedOrder.isSimulation ? '⚡ Simulation Order Created' : '✓ Order Confirmed'}
+              </p>
+              <p className="text-xs text-zinc-500">
+                Order Reference: <code data-testid="submitted-order-id" className="font-mono">{submittedOrder.id}</code> · Total: {formatPaise(submittedOrder.totalPaise)}
+              </p>
+            </div>
+            {submittedOrder.isSimulation && (
+              <Badge variant="outline" className="border-amber-500 text-amber-600">
+                SIMULATED
+              </Badge>
+            )}
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 id="cart-heading" className="text-lg font-semibold">Review cart</h2>
@@ -302,9 +331,77 @@ export function CartClient({ initialCart }: { initialCart: CartView | null }) {
               </p>
             )}
             {cart.status === 'CONFIRMED' ? (
-              <p className="mt-4 rounded-md bg-emerald-50 p-3 text-sm text-emerald-800">
-                Cart confirmed for the next stage. No order or inventory reservation was created.
-              </p>
+              <div className="mt-4 flex flex-col gap-3 rounded-md bg-emerald-50 p-4 text-sm text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-100">
+                <p className="font-medium">
+                  Cart is confirmed and ready for order submission.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={isPending || hasPriceWarning}
+                    data-testid="submit-order-button"
+                    onClick={() => {
+                      setFeedback(null)
+                      startTransition(async () => {
+                        const key = `order-${cart.id}-${Date.now()}`
+                        const res = await submitOrder({ idempotencyKey: key, isSimulation: false })
+                        if (res.ok) {
+                          setSubmittedOrder({ id: res.order.id, totalPaise: res.order.totalPaise })
+                          setFeedback({
+                            type: 'success',
+                            message: `Order #${res.order.id.slice(0, 8)} placed successfully!`,
+                          })
+                          await createNewCart()
+                          loadCart()
+                        } else {
+                          setFeedback({ type: 'error', message: res.message })
+                        }
+                      })
+                    }}
+                  >
+                    {isPending ? 'Placing order…' : 'Place Commercial Order'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={isPending}
+                    data-testid="submit-simulation-order-button"
+                    onClick={() => {
+                      setFeedback(null)
+                      startTransition(async () => {
+                        const key = `sim-order-${cart.id}-${Date.now()}`
+                        const res = await submitOrder({ idempotencyKey: key, isSimulation: true })
+                        if (res.ok) {
+                          setSubmittedOrder({
+                            id: res.order.id,
+                            totalPaise: res.order.totalPaise,
+                            isSimulation: true,
+                          })
+                          setFeedback({
+                            type: 'success',
+                            message: `[SIMULATION] Demo order #${res.order.id.slice(0, 8)} placed successfully!`,
+                          })
+                          await createNewCart()
+                          loadCart()
+                        } else {
+                          setFeedback({ type: 'error', message: res.message })
+                        }
+                      })
+                    }}
+                  >
+                    Place Demo / Simulation Order
+                  </Button>
+                </div>
+                {hasPriceWarning ? (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    * Commercial order is disabled: catalogue price basis is unconfirmed and commercial policy is pending approval. Simulation orders use synthetic demo values and do not change actual inventory.
+                  </p>
+                ) : (
+                  <p className="text-xs text-zinc-500">
+                    Note: Simulation orders allow testing the end-to-end workflow without modifying actual distributor inventory.
+                  </p>
+                )}
+              </div>
             ) : (
               <Button
                 type="button"

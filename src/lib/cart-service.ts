@@ -18,6 +18,8 @@ export type CartServiceErrorCode =
   | 'INVALID_INPUT'
   | 'PRODUCT_UNAVAILABLE'
   | 'LINE_NOT_FOUND'
+  | 'CART_NOT_ACTIVE'
+  | 'CART_ALREADY_SUBMITTED'
   | 'STALE_CART'
   | 'CONFLICT'
   | 'CALCULATION_ERROR'
@@ -88,6 +90,44 @@ type ServiceResult = {
 }
 
 export type CartServiceResult = ServiceResult
+
+export type HistoricalCartView = {
+  id: string
+  retailerId: string
+  status: 'SUBMITTED'
+  submittedAt: Date | null
+  createdAt: Date
+  updatedAt: Date
+  lines: Array<{
+    id: string
+    productId: string
+    quantity: number
+  }>
+  order: {
+    id: string
+    retailerId: string
+    status: 'SUBMITTED' | 'APPROVED' | 'REJECTED'
+    submittedAt: Date
+    reservationExpiresAt: Date
+    subtotalPaise: number
+    discountPaise: number
+    totalPaise: number
+    lines: Array<{
+      id: string
+      productId: string | null
+      sku: string
+      productName: string
+      paidQty: number
+      freeQty: number
+      reservedQty: number
+      unitPricePaise: number
+      priceBasis: PriceBasis
+      grossPaise: number
+      discountPaise: number
+      totalPaise: number
+    }>
+  } | null
+}
 
 function mapScheme(
   scheme: ProductWithSchemes['schemes'][number],
@@ -202,6 +242,9 @@ function buildView(
       },
     }
   }
+  if (cart.status === 'SUBMITTED') {
+    throw new CartServiceError('CART_ALREADY_SUBMITTED', 'Submitted carts are not current carts')
+  }
 
   const lines: CartViewLine[] = cart.lines.map((line) => {
     if (!line.product) {
@@ -253,8 +296,12 @@ function buildView(
 }
 
 async function loadCart(client: DbClient | TransactionClient, retailerId: string) {
-  return client.cart.findUnique({
-    where: { retailerId },
+  return client.cart.findFirst({
+    where: {
+      retailerId,
+      status: 'ACTIVE',
+    },
+    orderBy: { updatedAt: 'desc' },
     include: {
       lines: {
         orderBy: { productId: 'asc' },
@@ -270,28 +317,28 @@ async function loadCart(client: DbClient | TransactionClient, retailerId: string
   })
 }
 
-async function reopenIfStale(
-  tx: TransactionClient,
-  cart: NonNullable<Awaited<ReturnType<typeof loadCart>>>,
-): Promise<boolean> {
-  if (cart.status !== 'CONFIRMED' || !cart.confirmedFingerprint) return false
-  const currentFingerprint = fingerprintCartLines(cart.lines)
-  if (currentFingerprint === cart.confirmedFingerprint) return false
-
-  const result = await tx.cart.updateMany({
-    where: {
-      id: cart.id,
-      retailerId: cart.retailerId,
-      status: 'CONFIRMED',
-      confirmedFingerprint: cart.confirmedFingerprint,
-    },
-    data: {
-      status: 'ACTIVE',
-      confirmedAt: null,
-      confirmedFingerprint: null,
-    },
+async function loadOwnedCartStatus(
+  client: DbClient | TransactionClient,
+  retailerId: string,
+) {
+  return (
+    await client.cart.findFirst({
+      where: { retailerId, status: 'SUBMITTED' },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, status: true },
+    })
+  ) ?? client.cart.findFirst({
+    where: { retailerId, status: 'CONFIRMED' },
+    orderBy: { updatedAt: 'desc' },
+    select: { id: true, status: true },
   })
-  return result.count === 1
+}
+
+function rejectNonActiveCart(status: 'ACTIVE' | 'CONFIRMED' | 'SUBMITTED'): never {
+  if (status === 'SUBMITTED') {
+    throw new CartServiceError('CART_ALREADY_SUBMITTED', 'Submitted carts cannot be modified')
+  }
+  throw new CartServiceError('CART_NOT_ACTIVE', 'Cart is not active')
 }
 
 async function mutateCart<T>(
@@ -323,10 +370,7 @@ async function mutateCart<T>(
 export async function getCartForRetailer(retailerId: string): Promise<ServiceResult> {
   return prisma.$transaction(async (tx) => {
     const cart = await loadCart(tx, retailerId)
-    let stale = false
-    if (cart) stale = await reopenIfStale(tx, cart)
-    const current = stale ? await loadCart(tx, retailerId) : cart
-    return buildView(current, retailerId, stale)
+    return buildView(cart, retailerId, false)
   })
 }
 
@@ -343,19 +387,17 @@ export async function addCartProduct(
     if (!product || !product.isActive) {
       throw new CartServiceError('PRODUCT_UNAVAILABLE', 'Product is unavailable')
     }
-    const existingCart = await tx.cart.findUnique({
-      where: { retailerId },
-      select: { status: true },
-    })
-    const cart = await tx.cart.upsert({
-      where: { retailerId },
-      create: { retailerId },
-      update: {
-        status: 'ACTIVE',
-        confirmedAt: null,
-        confirmedFingerprint: null,
-      },
-    })
+    const existingCart = await loadCart(tx, retailerId)
+    const cart = existingCart
+      ? await tx.cart.update({
+          where: { id: existingCart.id },
+          data: {
+            status: 'ACTIVE',
+            confirmedAt: null,
+            confirmedFingerprint: null,
+          },
+        })
+      : await tx.cart.create({ data: { retailerId, status: 'ACTIVE' } })
     await tx.cartLine.upsert({
       where: { cartId_productId: { cartId: cart.id, productId } },
       create: { cartId: cart.id, productId, quantity },
@@ -376,10 +418,14 @@ export async function updateCartLine(
 ): Promise<ServiceResult> {
   return mutateCart(async (tx) => {
     const line = await tx.cartLine.findFirst({
-      where: { id: lineId, cart: { retailerId } },
+      where: {
+        id: lineId,
+        cart: { retailerId },
+      },
       include: { product: true, cart: { select: { status: true } } },
     })
     if (!line) throw new CartServiceError('LINE_NOT_FOUND', 'Cart line not found')
+    if (line.cart.status !== 'ACTIVE') rejectNonActiveCart(line.cart.status)
     if (!line.product.isActive) {
       throw new CartServiceError('PRODUCT_UNAVAILABLE', 'Product is unavailable')
     }
@@ -394,7 +440,7 @@ export async function updateCartLine(
     return buildView(
       await loadCart(tx, retailerId),
       retailerId,
-      line.cart.status === 'CONFIRMED',
+      false,
     )
   })
 }
@@ -405,12 +451,16 @@ export async function removeCartLine(
 ): Promise<ServiceResult> {
   return mutateCart(async (tx) => {
     const line = await tx.cartLine.findFirst({
-      where: { id: lineId, cart: { retailerId } },
+      where: {
+        id: lineId,
+        cart: { retailerId },
+      },
       select: { id: true, cartId: true, cart: { select: { status: true } } },
     })
     if (!line) {
       return buildView(await loadCart(tx, retailerId), retailerId, false)
     }
+    if (line.cart.status !== 'ACTIVE') rejectNonActiveCart(line.cart.status)
     await tx.cart.update({
       where: { id: line.cartId },
       data: { status: 'ACTIVE', confirmedAt: null, confirmedFingerprint: null },
@@ -419,18 +469,19 @@ export async function removeCartLine(
     return buildView(
       await loadCart(tx, retailerId),
       retailerId,
-      line.cart.status === 'CONFIRMED',
+      false,
     )
   })
 }
 
 export async function clearCart(retailerId: string): Promise<ServiceResult> {
   return mutateCart(async (tx) => {
-    const cart = await tx.cart.findUnique({
-      where: { retailerId },
-      select: { id: true, status: true },
-    })
-    if (!cart) return buildView(null, retailerId, false)
+    const cart = await loadCart(tx, retailerId);
+    if (!cart) {
+      const ownedStatus = await loadOwnedCartStatus(tx, retailerId)
+      if (ownedStatus) rejectNonActiveCart(ownedStatus.status)
+      return buildView(null, retailerId, false)
+    }
     await tx.cartLine.deleteMany({ where: { cartId: cart.id } })
     await tx.cart.update({
       where: { id: cart.id },
@@ -439,22 +490,117 @@ export async function clearCart(retailerId: string): Promise<ServiceResult> {
     return buildView(
       await loadCart(tx, retailerId),
       retailerId,
-      cart.status === 'CONFIRMED',
+      false,
     )
   })
+}
+
+export async function createNewCart(retailerId: string): Promise<ServiceResult> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const existing = await loadCart(tx, retailerId)
+        if (existing) return buildView(existing, retailerId, false)
+
+        await tx.cart.create({ data: { retailerId, status: 'ACTIVE' } })
+        const created = await loadCart(tx, retailerId)
+        if (!created) {
+          throw new CartServiceError('INTERNAL_ERROR', 'Cart could not be created')
+        }
+        return buildView(created, retailerId, false)
+      })
+    } catch (error) {
+      if (error instanceof CartServiceError) throw error
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'P2002' &&
+        attempt === 0
+      ) {
+        continue
+      }
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'P2002') {
+        throw new CartServiceError('CONFLICT', 'Cart creation conflicted with another change')
+      }
+      throw new CartServiceError('INTERNAL_ERROR', 'Cart creation failed')
+    }
+  }
+  throw new CartServiceError('CONFLICT', 'Cart creation conflicted with another change')
+}
+
+export async function getSubmittedCartsForRetailer(
+  retailerId: string,
+): Promise<HistoricalCartView[]> {
+  const carts = await prisma.cart.findMany({
+    where: { retailerId, status: 'SUBMITTED' },
+    orderBy: { submittedAt: 'desc' },
+    include: {
+      lines: {
+        orderBy: { productId: 'asc' },
+        select: { id: true, productId: true, quantity: true },
+      },
+    },
+  })
+
+  const orders = await prisma.order.findMany({
+    where: {
+      retailerId,
+      cartId: { in: carts.map((cart) => cart.id) },
+    },
+    include: {
+      lines: {
+        orderBy: { id: 'asc' },
+        select: {
+          id: true,
+          productId: true,
+          sku: true,
+          productName: true,
+          paidQty: true,
+          freeQty: true,
+          reservedQty: true,
+          unitPricePaise: true,
+          priceBasis: true,
+          grossPaise: true,
+          discountPaise: true,
+          totalPaise: true,
+        },
+      },
+    },
+  })
+  const ordersByCartId = new Map(orders.map((order) => [order.cartId, order]))
+
+  return carts.map((cart) => ({
+    id: cart.id,
+    retailerId: cart.retailerId,
+    status: 'SUBMITTED',
+    submittedAt: cart.submittedAt,
+    createdAt: cart.createdAt,
+    updatedAt: cart.updatedAt,
+    lines: cart.lines,
+    order: ordersByCartId.get(cart.id)
+      ? {
+          id: ordersByCartId.get(cart.id)!.id,
+          retailerId: ordersByCartId.get(cart.id)!.retailerId,
+          status: ordersByCartId.get(cart.id)!.status,
+          submittedAt: ordersByCartId.get(cart.id)!.submittedAt,
+          reservationExpiresAt: ordersByCartId.get(cart.id)!.reservationExpiresAt,
+          subtotalPaise: ordersByCartId.get(cart.id)!.subtotalPaise,
+          discountPaise: ordersByCartId.get(cart.id)!.discountPaise,
+          totalPaise: ordersByCartId.get(cart.id)!.totalPaise,
+          lines: ordersByCartId.get(cart.id)!.lines,
+        }
+      : null,
+  }))
 }
 
 export async function confirmCart(retailerId: string): Promise<ServiceResult> {
   return mutateCart(async (tx) => {
     const cart = await loadCart(tx, retailerId)
     if (!cart || cart.lines.length === 0) {
+      const ownedStatus = await loadOwnedCartStatus(tx, retailerId)
+      if (ownedStatus) rejectNonActiveCart(ownedStatus.status)
       throw new CartServiceError('INVALID_INPUT', 'Cart is empty')
-    }
-    if (await reopenIfStale(tx, cart)) {
-      throw new CartServiceError(
-        'STALE_CART',
-        'Cart changed since it was last confirmed; review it again',
-      )
     }
     const built = buildView(cart, retailerId, false)
     const invalid = built.view.lines.some(
@@ -467,14 +613,24 @@ export async function confirmCart(retailerId: string): Promise<ServiceResult> {
       throw new CartServiceError('STALE_CART', 'Cart contains unavailable or insufficient stock')
     }
     const fingerprint = fingerprintCartLines(cart.lines)
+    const confirmedAt = new Date()
     await tx.cart.update({
       where: { id: cart.id },
       data: {
         status: 'CONFIRMED',
-        confirmedAt: new Date(),
+        confirmedAt,
         confirmedFingerprint: fingerprint,
       },
     })
-    return buildView(await loadCart(tx, retailerId), retailerId, false)
+    return buildView(
+      {
+        ...cart,
+        status: 'CONFIRMED',
+        confirmedAt,
+        confirmedFingerprint: fingerprint,
+      },
+      retailerId,
+      false,
+    )
   })
 }

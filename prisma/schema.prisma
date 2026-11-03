@@ -37,6 +37,13 @@ enum SchemeKind {
 enum CartStatus {
   ACTIVE
   CONFIRMED
+  SUBMITTED
+}
+
+enum OrderStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
 }
 
 model User {
@@ -46,7 +53,8 @@ model User {
   role        UserRole
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  cart        Cart?
+  carts       Cart[]
+  orders      Order[]
 }
 
 model Product {
@@ -66,6 +74,7 @@ model Product {
   updatedAt     DateTime    @updatedAt
   schemes       Scheme[]
   cartLines     CartLine[]
+  orderLines    OrderLine[]
 
   @@index([isActive, name])
 }
@@ -86,15 +95,17 @@ model Scheme {
 }
 
 model Cart {
-  id                   String     @id @default(cuid())
-  retailerId           String     @unique
-  status               CartStatus @default(ACTIVE)
+  id                   String      @id @default(cuid())
+  retailerId           String
+  status               CartStatus  @default(ACTIVE)
   confirmedAt          DateTime?
   confirmedFingerprint String?
-  createdAt            DateTime   @default(now())
-  updatedAt            DateTime   @updatedAt
-  retailer             User       @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  submittedAt          DateTime?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  retailer             User        @relation(fields: [retailerId], references: [id], onDelete: Cascade)
   lines                CartLine[]
+  order                Order?
 }
 
 model CartLine {
@@ -109,5 +120,61 @@ model CartLine {
 
   @@unique([cartId, productId])
   @@index([cartId])
+  @@index([productId])
+}
+
+model Order {
+  id                   String      @id @default(cuid())
+  retailerId           String
+  cartId               String      @unique
+  idempotencyKey       String
+  status               OrderStatus @default(SUBMITTED)
+  submittedAt          DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+  reservationExpiresAt DateTime
+  inventoryReleasedAt  DateTime?
+  rejectionReason      String?
+  subtotalPaise        Int
+  discountPaise        Int
+  totalPaise           Int
+  priceBasisConfirmed  Boolean
+  isSimulation         Boolean     @default(false)
+  reviewedByUserId     String?
+  retailer             User        @relation(fields: [retailerId], references: [id], onDelete: Restrict)
+  cart                 Cart        @relation(fields: [cartId], references: [id], onDelete: Restrict)
+  lines                OrderLine[]
+
+  @@index([retailerId, submittedAt])
+  @@index([status, reservationExpiresAt])
+  @@unique([retailerId, idempotencyKey])
+}
+
+model OrderLine {
+  id                String      @id @default(cuid())
+  orderId           String
+  productId         String?
+  sku               String
+  productName       String
+  paidQty           Int
+  freeQty           Int
+  reservedQty       Int
+  sellingUnit       ProductUnit
+  inventoryUnit     ProductUnit
+  unitPricePaise    Int
+  priceBasis        PriceBasis
+  grossPaise        Int
+  discountPaise     Int
+  totalPaise        Int
+  schemeKind        SchemeKind?
+  schemeId          String?
+  schemeBuyQty      Int?
+  schemeFreeQty     Int?
+  schemeMinQty      Int?
+  schemeDiscountBps Int?
+  createdAt         DateTime    @default(now())
+  order             Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product           Product?    @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
   @@index([productId])
 }

@@ -7,11 +7,14 @@ import {
   addCartProduct as addCartProductForRetailer,
   clearCart as clearCartForRetailer,
   confirmCart as confirmCartForRetailer,
+  createNewCart as createNewCartForRetailer,
   getCartForRetailer,
+  getSubmittedCartsForRetailer,
   removeCartLine as removeCartLineForRetailer,
   updateCartLine as updateCartLineForRetailer,
   CartServiceError,
   type CartServiceResult,
+  type HistoricalCartView,
 } from '@/lib/cart-service'
 
 const productInputSchema = z.object({
@@ -25,6 +28,10 @@ const lineInputSchema = z.object({
 
 export type CartActionResult =
   | { ok: true; cart: CartServiceResult['view']; stale: boolean }
+  | { ok: false; code: string; message: string }
+
+export type CartHistoryActionResult =
+  | { ok: true; carts: HistoricalCartView[] }
   | { ok: false; code: string; message: string }
 
 async function retailerId(): Promise<
@@ -70,6 +77,20 @@ async function run(
 
 export async function getCurrentCart(): Promise<CartActionResult> {
   return run(getCartForRetailer)
+}
+
+export async function createNewCart(): Promise<CartActionResult> {
+  return run(createNewCartForRetailer)
+}
+
+export async function getCartHistory(): Promise<CartHistoryActionResult> {
+  const auth = await retailerId()
+  if (!auth.ok) return auth
+  try {
+    return { ok: true, carts: await getSubmittedCartsForRetailer(auth.id) }
+  } catch {
+    return { ok: false, code: 'INTERNAL_ERROR', message: 'Cart history unavailable' }
+  }
 }
 
 export async function addCartProduct(input: unknown): Promise<CartActionResult> {

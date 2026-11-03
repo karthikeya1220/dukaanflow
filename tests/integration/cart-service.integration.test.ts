@@ -4,11 +4,20 @@ import {
   addCartProduct,
   clearCart,
   confirmCart,
+  createNewCart,
   getCartForRetailer,
+  getSubmittedCartsForRetailer,
   removeCartLine,
+  updateCartLine,
 } from '@/lib/cart-service'
+import { assertSafeTestDatabaseTarget } from '../test-database-safety'
 
-const describeIfDatabase = process.env.DATABASE_URL ? describe : describe.skip
+const canRunIntegration =
+  process.env.TEST_DB_MUTATIONS === '1' &&
+  Boolean(process.env.TEST_DATABASE_NAME) &&
+  Boolean(process.env.TEST_DATABASE_SCHEMA)
+
+const describeIfDatabase = canRunIntegration ? describe : describe.skip
 
 describeIfDatabase('cart service integration', () => {
   let retailerA: { id: string }
@@ -16,8 +25,10 @@ describeIfDatabase('cart service integration', () => {
   let orderDesk: { id: string }
   let product: { id: string }
   let zeroStockProduct: { id: string }
+  let setupComplete = false
 
   beforeAll(async () => {
+    assertSafeTestDatabaseTarget()
     const suffix = Date.now().toString()
     ;[retailerA, retailerB, orderDesk] = await prisma.$transaction([
       prisma.user.create({
@@ -82,9 +93,14 @@ describeIfDatabase('cart service integration', () => {
       },
       select: { id: true },
     })
+    setupComplete = true
   })
 
   afterAll(async () => {
+    if (!setupComplete) return
+    await prisma.order.deleteMany({
+      where: { retailerId: { in: [retailerA.id, retailerB.id] } },
+    })
     await prisma.cart.deleteMany({
       where: { retailerId: { in: [retailerA.id, retailerB.id] } },
     })
@@ -129,33 +145,145 @@ describeIfDatabase('cart service integration', () => {
     ).toBe(before.inventoryQty)
   })
 
-  it('persists confirmation and reopens when current stock changes', async () => {
+  it('keeps confirmed carts out of current-cart operations', async () => {
     await clearCart(retailerA.id)
     await addCartProduct(retailerA.id, product.id, 10)
     const confirmed = await confirmCart(retailerA.id)
     expect(confirmed.view.status).toBe('CONFIRMED')
     expect(confirmed.view.confirmedFingerprint).toMatch(/^[a-f0-9]{64}$/)
+    const confirmedCartId = confirmed.view.id
 
-    await prisma.product.update({
-      where: { id: product.id },
-      data: { inventoryQty: 5 },
-    })
     const stale = await getCartForRetailer(retailerA.id)
-    expect(stale.stale).toBe(true)
-    expect(stale.view.status).toBe('ACTIVE')
-    expect(stale.view.confirmedAt).toBeNull()
-    expect(stale.view.confirmedFingerprint).toBeNull()
-    await prisma.product.update({
-      where: { id: product.id },
-      data: { inventoryQty: 100 },
-    })
+    expect(stale.view.id).toBeNull()
+    const replacement = await createNewCart(retailerA.id)
+    expect(replacement.view.status).toBe('ACTIVE')
+    expect(replacement.view.id).not.toBe(confirmedCartId)
+    expect(
+      await prisma.cart.findUniqueOrThrow({
+        where: { id: confirmedCartId! },
+        select: { status: true, confirmedFingerprint: true },
+      }),
+    ).toMatchObject({ status: 'CONFIRMED', confirmedFingerprint: confirmed.view.confirmedFingerprint })
   })
 
   it('blocks confirmation when required stock is unavailable', async () => {
+    await createNewCart(retailerA.id)
     await clearCart(retailerA.id)
     await addCartProduct(retailerA.id, zeroStockProduct.id, 1)
     await expect(confirmCart(retailerA.id)).rejects.toMatchObject({
       code: 'STALE_CART',
     })
+  })
+
+  it('preserves submitted history and creates one concurrent active cart', async () => {
+    await clearCart(retailerB.id)
+    await addCartProduct(retailerB.id, product.id, 2)
+    const submitted = await getCartForRetailer(retailerB.id)
+    expect(submitted.view.id).toBeTruthy()
+
+    await prisma.cart.update({
+      where: { id: submitted.view.id! },
+      data: { status: 'SUBMITTED', submittedAt: new Date() },
+    })
+    await prisma.order.create({
+      data: {
+        retailerId: retailerB.id,
+        cartId: submitted.view.id!,
+        idempotencyKey: `integration-key-${Date.now()}`,
+        reservationExpiresAt: new Date(Date.now() + 86_400_000),
+        subtotalPaise: 1620,
+        discountPaise: 0,
+        totalPaise: 1620,
+        priceBasisConfirmed: true,
+        lines: {
+          create: {
+            productId: product.id,
+            sku: 'INT',
+            productName: 'Integration Biscuit',
+            paidQty: 2,
+            freeQty: 0,
+            reservedQty: 2,
+            sellingUnit: 'CASE',
+            inventoryUnit: 'CASE',
+            unitPricePaise: 810,
+            priceBasis: 'PER_CASE',
+            grossPaise: 1620,
+            discountPaise: 0,
+            totalPaise: 1620,
+          },
+        },
+      },
+    })
+
+    const history = await getSubmittedCartsForRetailer(retailerB.id)
+    expect(history).toHaveLength(1)
+    expect(history[0].id).toBe(submitted.view.id)
+    expect(history[0].lines[0].quantity).toBe(2)
+    expect(history[0].order?.retailerId).toBe(retailerB.id)
+    expect((await getSubmittedCartsForRetailer(retailerA.id))).toHaveLength(0)
+
+    const [first, second] = await Promise.all([
+      createNewCart(retailerB.id),
+      createNewCart(retailerB.id),
+    ])
+    expect(first.view.id).toBeTruthy()
+    expect(second.view.id).toBe(first.view.id)
+    expect(first.view.status).toBe('ACTIVE')
+    expect(
+      await prisma.cart.count({ where: { retailerId: retailerB.id, status: 'ACTIVE' } }),
+    ).toBe(1)
+
+    await expect(
+      updateCartLine(retailerB.id, history[0].lines[0].id, 3),
+    ).rejects.toMatchObject({ code: 'CART_ALREADY_SUBMITTED' })
+    expect((await getSubmittedCartsForRetailer(retailerB.id))[0].lines[0].quantity).toBe(2)
+  })
+
+  it('rejects submitted clear and confirmation without revealing foreign carts', async () => {
+    await createNewCart(retailerA.id)
+    await clearCart(retailerA.id)
+    await addCartProduct(retailerA.id, product.id, 1)
+    const submitted = await getCartForRetailer(retailerA.id)
+    await prisma.cart.update({
+      where: { id: submitted.view.id! },
+      data: { status: 'SUBMITTED', submittedAt: new Date() },
+    })
+
+    await expect(clearCart(retailerA.id)).rejects.toMatchObject({
+      code: 'CART_ALREADY_SUBMITTED',
+    })
+    await expect(confirmCart(retailerA.id)).rejects.toMatchObject({
+      code: 'CART_ALREADY_SUBMITTED',
+    })
+    await expect(clearCart(retailerB.id)).resolves.toMatchObject({
+      view: { id: expect.any(String) },
+    })
+  })
+
+  it('does not expose an order whose retailer differs from the cart owner', async () => {
+    await createNewCart(retailerB.id)
+    await clearCart(retailerB.id)
+    await addCartProduct(retailerB.id, product.id, 1)
+    const cart = await getCartForRetailer(retailerB.id)
+    await prisma.cart.update({
+      where: { id: cart.view.id! },
+      data: { status: 'SUBMITTED', submittedAt: new Date() },
+    })
+    await prisma.order.create({
+      data: {
+        retailerId: retailerA.id,
+        cartId: cart.view.id!,
+        idempotencyKey: `mismatched-${Date.now()}`,
+        reservationExpiresAt: new Date(Date.now() + 86_400_000),
+        subtotalPaise: 810,
+        discountPaise: 0,
+        totalPaise: 810,
+        priceBasisConfirmed: false,
+      },
+    })
+
+    const history = await getSubmittedCartsForRetailer(retailerB.id)
+    const mismatchedHistory = history.find((item) => item.id === cart.view.id)
+    expect(mismatchedHistory?.order).toBeNull()
   })
 })
