@@ -88,8 +88,8 @@ test.describe('DukaanFlow Full End-to-End Order Workflow', () => {
     await page.fill('[data-testid="ai-order-input"]', '2 cases Glucose biscuit')
     await page.getByTestId('ai-parse-btn').click()
 
-    // AI proposed mappings appear
-    await expect(page.getByText('Proposed Product Mappings')).toBeVisible()
+    // AI proposed mappings appear (allow up to 35s for external LLM response or deterministic fallback)
+    await expect(page.getByText('Proposed Product Mappings')).toBeVisible({ timeout: 35_000 })
     await expect(page.getByTestId('ai-add-cart-btn')).toBeVisible()
     await page.getByTestId('ai-add-cart-btn').click()
     await expect(page.getByText(/Added \d+ items to your cart!/)).toBeVisible()

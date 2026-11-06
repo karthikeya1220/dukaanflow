@@ -1,194 +1,176 @@
-import { prisma } from '@/db'
-import { ProductUnit } from '@/generated/prisma/enums'
+import type { ProductUnit } from '@/generated/prisma/enums'
+import {
+  fetchActiveCatalogue,
+  parseDeterministicOrder,
+  scoreCatalogueMatches,
+  type ParsedItemCandidate,
+  type ParsedOrderItem,
+  type AiOrderExtractionResult,
+  type DeterministicCatalogueEntry,
+} from '@/lib/ai/deterministic-parser'
+import { callAiOrderExtraction, isAiOrderConfigured, AiProviderError, getAiModel } from '@/lib/ai/openrouter'
 
-export interface ParsedItemCandidate {
-  productId: string
-  sku: string
-  name: string
-  confidence: number
-  unit: ProductUnit
+export type {
+  ParsedItemCandidate,
+  ParsedOrderItem,
+  AiOrderExtractionResult,
+} from '@/lib/ai/deterministic-parser'
+
+/**
+ * AI order-capture orchestrator.
+ *
+ * Contract with the assessment rules:
+ * - A real LLM (OpenRouter) proposes product mappings; when the provider is
+ *   unavailable the deterministic rule engine is used and the result is
+ *   explicitly labelled `engine: 'deterministic-fallback'`.
+ * - Every SKU the model proposes is revalidated against the live database
+ *   catalogue before being returned. Model-invented SKUs are discarded.
+ * - The model never sees or returns prices, discounts, schemes or stock, and
+ *   can never submit or approve orders. Cart insertion still requires an
+ *   explicit human confirmation click validated against the database.
+ */
+
+function clampConfidence(confidence: number): number {
+  if (!Number.isFinite(confidence)) return 0
+  return Math.max(0, Math.min(1, confidence))
 }
 
-export interface ParsedOrderItem {
-  rawLine: string
-  extractedProductName: string
-  extractedQuantity: number
-  extractedUnit: ProductUnit | null
-  matchedProduct: ParsedItemCandidate | null
-  alternatives: ParsedItemCandidate[]
-  unitAmbiguous: boolean
-  clarificationPrompt?: string
+function mapAiUnit(unit: string | null | undefined): ProductUnit | null {
+  return unit && (unit === 'CASE' || unit === 'PACK' || unit === 'PIECE') ? unit : null
 }
 
-export interface AiOrderExtractionResult {
-  originalText: string
-  items: ParsedOrderItem[]
-  unmatchedLines: string[]
-}
+function itemFromModelProposal(
+  rawLine: string,
+  productName: string,
+  quantity: number,
+  unit: ProductUnit | null,
+  confidenceLabel: string | undefined,
+  matched: ParsedItemCandidate | null,
+  alternatives: ParsedItemCandidate[],
+  ambiguous: boolean,
+  clarification: string | undefined,
+): ParsedOrderItem {
+  const noUnit = unit === null
+  const unitMismatch = matched !== null && unit !== null && unit !== matched.unit
+  const isAmbiguous = ambiguous || noUnit || unitMismatch
+  const requiresReview = matched === null || isAmbiguous || matched.confidence < 70
 
-const UNIT_PATTERNS: Record<string, ProductUnit> = {
-  case: ProductUnit.CASE,
-  cases: ProductUnit.CASE,
-  box: ProductUnit.CASE,
-  boxes: ProductUnit.CASE,
-  peti: ProductUnit.CASE,
-  carton: ProductUnit.CASE,
-  cartons: ProductUnit.CASE,
-  pack: ProductUnit.PACK,
-  packs: ProductUnit.PACK,
-  packet: ProductUnit.PACK,
-  packets: ProductUnit.PACK,
-  pkt: ProductUnit.PACK,
-  pkts: ProductUnit.PACK,
-  dabba: ProductUnit.PACK,
-  piece: ProductUnit.PIECE,
-  pieces: ProductUnit.PIECE,
-  pc: ProductUnit.PIECE,
-  pcs: ProductUnit.PIECE,
-  single: ProductUnit.PIECE,
-}
-
-function parseLine(line: string): { quantity: number; unit: ProductUnit | null; unitAmbiguous: boolean; productName: string } {
-  const clean = line.trim()
-  // Pattern: "10 cases Parle-G" or "Parle-G 10 pkt" or "5 Britannia Good Day"
-  const qtyFirstRegex = /^(\d+)\s*([a-zA-Z]+)?\s+(.+)$/
-  const qtyLastRegex = /^(.+?)\s+(\d+)\s*([a-zA-Z]+)?$/
-
-  let qty = 1
-  let unit: ProductUnit | null = null
-  let unitAmbiguous = false
-  let rawName = clean
-
-  const matchFirst = clean.match(qtyFirstRegex)
-  if (matchFirst) {
-    qty = parseInt(matchFirst[1], 10)
-    const unitWord = matchFirst[2]?.toLowerCase()
-    rawName = matchFirst[3]
-    if (unitWord && UNIT_PATTERNS[unitWord]) {
-      unit = UNIT_PATTERNS[unitWord]
-    } else if (unitWord) {
-      // e.g. "10 g" or unrecognised unit
-      unitAmbiguous = true
-    } else {
-      unitAmbiguous = true
-    }
-  } else {
-    const matchLast = clean.match(qtyLastRegex)
-    if (matchLast) {
-      rawName = matchLast[1]
-      qty = parseInt(matchLast[2], 10)
-      const unitWord = matchLast[3]?.toLowerCase()
-      if (unitWord && UNIT_PATTERNS[unitWord]) {
-        unit = UNIT_PATTERNS[unitWord]
-      } else if (unitWord) {
-        unitAmbiguous = true
-      } else {
-        unitAmbiguous = true
-      }
+  let prompt = clarification
+  if (!prompt && matched) {
+    if (unitMismatch) {
+      prompt = `Requested in ${unit?.toLowerCase()}s, but this item is only orderable in ${matched.unit.toLowerCase()}s. Did you mean ${quantity} ${matched.unit.toLowerCase()}${quantity > 1 ? 's' : ''}?`
+    } else if (noUnit) {
+      prompt = `Did you mean ${Math.max(1, Math.floor(quantity))} ${matched.unit.toLowerCase()}${quantity > 1 ? 's' : ''}?`
     }
   }
 
   return {
-    quantity: Math.max(1, qty),
-    unit,
-    unitAmbiguous,
-    productName: rawName.trim(),
+    rawLine,
+    extractedProductName: productName,
+    extractedQuantity: Number.isFinite(quantity) && quantity >= 1 ? Math.floor(quantity) : 1,
+    extractedUnit: unit ?? matched?.unit ?? null,
+    matchedProduct: matched,
+    alternatives,
+    unitAmbiguous: isAmbiguous,
+    requiresReview,
+    clarificationPrompt: prompt,
   }
 }
 
-/**
- * Parses natural language orders with product matching, quantity and unit extraction,
- * alternatives for ambiguous matches, and confidence scoring.
- * Preserves original retailer input.
- */
-export async function parseNaturalLanguageOrder(
-  retailerId: string,
+async function extractWithAi(
   inputText: string,
+  products: DeterministicCatalogueEntry[],
 ): Promise<AiOrderExtractionResult> {
-  const lines = inputText
-    .split(/\r?\n|,/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0)
+  const { extraction: modelResult, responseModel } = await callAiOrderExtraction(inputText, products)
 
-  // Fetch available catalogue products
-  const products = await prisma.product.findMany({
-    where: { isActive: true },
-    select: {
-      id: true,
-      sku: true,
-      name: true,
-      sellingUnit: true,
-      inventoryUnit: true,
-    },
-  })
-
+  // DB revalidation index — the only source of valid product identities.
+  const bySku = new Map(products.map((p) => [p.sku, p]))
   const items: ParsedOrderItem[] = []
-  const unmatchedLines: string[] = []
+  const unmatchedLines = [...modelResult.unmatchedLines]
 
-  for (const line of lines) {
-    const { quantity, unit, unitAmbiguous, productName } = parseLine(line)
-    const queryTokens = productName.toLowerCase().split(/\s+/).filter(Boolean)
+  for (const proposal of modelResult.items) {
+    const matchedSkuValid =
+      typeof proposal.matchedSku === 'string' && proposal.matchedSku.length > 0
+        ? bySku.get(proposal.matchedSku) ?? null
+        : null
 
-    if (queryTokens.length === 0) continue
-
-    // Calculate score for each product
-    const scoredProducts = products.map((prod) => {
-      const nameLower = prod.name.toLowerCase()
-      const skuLower = prod.sku.toLowerCase()
-      let matches = 0
-
-      for (const token of queryTokens) {
-        if (nameLower.includes(token) || skuLower.includes(token)) {
-          matches += 1
+    const matched: ParsedItemCandidate | null = matchedSkuValid
+      ? {
+          productId: matchedSkuValid.id,
+          sku: matchedSkuValid.sku,
+          name: matchedSkuValid.name,
+          confidence: Math.round(clampConfidence(proposal.confidence) * 100),
+          unit: matchedSkuValid.sellingUnit,
         }
-      }
+      : null
 
-      const score = matches / Math.max(queryTokens.length, 1)
-      return {
-        product: prod,
-        score,
-      }
-    })
+    // Deterministic scorer provides alternate suggestions from real SKUs only.
+    const alternatives = scoreCatalogueMatches(proposal.productName, products).filter(
+      (c) => c.sku !== matched?.sku,
+    )
 
-    scoredProducts.sort((a, b) => b.score - a.score)
-
-    const candidates: ParsedItemCandidate[] = scoredProducts
-      .filter((sp) => sp.score > 0)
-      .slice(0, 3)
-      .map((sp) => ({
-        productId: sp.product.id,
-        sku: sp.product.sku,
-        name: sp.product.name,
-        confidence: Math.round(sp.score * 100),
-        unit: sp.product.sellingUnit,
-      }))
-
-    if (candidates.length === 0) {
-      unmatchedLines.push(line)
-      continue
-    }
-
-    const matched = candidates[0]
-    const alternatives = candidates.slice(1, 3)
-
-    items.push({
-      rawLine: line,
-      extractedProductName: productName,
-      extractedQuantity: quantity,
-      extractedUnit: unit ?? matched.unit,
-      matchedProduct: matched,
+    const item = itemFromModelProposal(
+      proposal.rawLine,
+      proposal.productName,
+      proposal.quantity,
+      mapAiUnit(proposal.unit),
+      undefined,
+      matched,
       alternatives,
-      unitAmbiguous,
-      clarificationPrompt: unitAmbiguous
-        ? `Did you mean ${quantity} ${matched.unit.toLowerCase()}s?`
-        : undefined,
-    })
+      Boolean(proposal.ambiguous),
+      proposal.clarification ?? undefined,
+    )
+    items.push(item)
+
+    if (!matched) {
+      unmatchedLines.push(proposal.rawLine)
+    }
   }
 
   return {
     originalText: inputText,
     items,
     unmatchedLines,
+    engine: 'ai',
+    aiModel: responseModel ?? undefined,
   }
 }
 
+/**
+ * Parses natural language order text into validated SKU proposals.
+ * Requires an explicit human confirmation step (UI) before anything reaches
+ * the cart, and DB revalidation of every proposal server-side.
+ */
+export async function parseNaturalLanguageOrder(
+  retailerId: string,
+  inputText: string,
+): Promise<AiOrderExtractionResult> {
+  try {
+    if (!isAiOrderConfigured()) {
+      throw new AiProviderError(
+        'AI_MISSING_CREDENTIALS',
+        'AI_API_KEY is not configured; using the rule-based helper engine',
+      )
+    }
+    const products = await fetchActiveCatalogue()
+    const aiResult = await extractWithAi(inputText, products)
+    // Sanitized telemetry only: engine + model id + item count. The prompt,
+    // retailer text and raw model response are never logged.
+    console.info(
+      `[ai-order] engine=ai model=${aiResult.aiModel ?? 'unknown'} items=${aiResult.items.length}`,
+    )
+    return aiResult
+  } catch (error) {
+    const fallbackReason =
+      error instanceof AiProviderError
+        ? error.code
+        : 'AI_PROVIDER_ERROR'
+    // Sanitized warning: reason code and requested model id only — never the
+    // prompt, retailer text or raw model response content.
+    console.warn(
+      `[ai-order] falling back engine=deterministic-fallback reason=${fallbackReason} requestedModel=${getAiModel()}`,
+    )
+    const fallback = await parseDeterministicOrder(retailerId, inputText)
+    return { ...fallback, engine: 'deterministic-fallback', fallbackReason }
+  }
+}

@@ -11,12 +11,21 @@ import {
 import type { AiOrderExtractionResult, ParsedOrderItem } from '@/lib/ai-order-parser'
 import { Sparkles, X, Check, AlertTriangle, CornerDownLeft, Info, HelpCircle } from 'lucide-react'
 
+const FALLBACK_REASON_LABELS: Record<string, string> = {
+  AI_MISSING_CREDENTIALS: 'AI is not configured on this deployment',
+  AI_TIMEOUT: 'the AI request timed out',
+  AI_RATE_LIMITED: 'the AI provider is rate-limited',
+  AI_MALFORMED_RESPONSE: 'the AI service returned an unusable response',
+  AI_PROVIDER_ERROR: 'the AI provider reported an error',
+}
+
 export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) {
   const [isOpen, setIsOpen] = useState(false)
   const [inputText, setInputText] = useState('')
   const [isPending, startTransition] = useTransition()
   const [extraction, setExtraction] = useState<AiOrderExtractionResult | null>(null)
   const [selectedItems, setSelectedItems] = useState<Record<number, { productId: string; quantity: number }>>({})
+  const [lineQuantities, setLineQuantities] = useState<Record<number, number>>({})
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   function handleParse() {
@@ -27,8 +36,12 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
       if (res.ok) {
         setExtraction(res.extraction)
         const defaults: Record<number, { productId: string; quantity: number }> = {}
+        const initialQtys: Record<number, number> = {}
         res.extraction.items.forEach((item, idx) => {
-          if (item.matchedProduct) {
+          initialQtys[idx] = item.extractedQuantity
+          // Never preselect low-confidence or ambiguous proposals for cart
+          // insertion — they require an explicit human selection/review.
+          if (item.matchedProduct && !item.requiresReview) {
             defaults[idx] = {
               productId: item.matchedProduct.productId,
               quantity: item.extractedQuantity,
@@ -36,6 +49,7 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
           }
         })
         setSelectedItems(defaults)
+        setLineQuantities(initialQtys)
       } else {
         setFeedback({ type: 'error', message: res.message })
       }
@@ -89,8 +103,15 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
               <div>
                 <div className="flex items-center gap-2">
                   <h3 className="text-base font-bold tracking-tight text-foreground">AI Quick Order Assist</h3>
-                  <Badge variant="outline" className="border-primary/40 bg-primary/5 text-primary text-[10px] py-0 px-1.5 font-semibold">
-                    HINGLISH & ENGLISH
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] py-0 px-1.5 font-semibold ${
+                      extraction?.engine === 'deterministic-fallback'
+                        ? 'border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                        : 'border-primary/40 bg-primary/5 text-primary'
+                    }`}
+                  >
+                    {extraction?.engine === 'deterministic-fallback' ? 'RULE-BASED FALLBACK' : 'AI POWERED'}
                   </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
@@ -168,6 +189,25 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
             </div>
           )}
 
+          {/* AI unavailable / fallback notice */}
+          {extraction?.engine === 'deterministic-fallback' && (
+            <div
+              role="status"
+              data-testid="ai-fallback-notice"
+              className="mt-4 rounded-lg border border-amber-300/40 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200"
+            >
+              <span className="flex items-center gap-1.5 font-semibold">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                AI service unavailable{extraction.fallbackReason && FALLBACK_REASON_LABELS[extraction.fallbackReason] ? ` — ${FALLBACK_REASON_LABELS[extraction.fallbackReason]}` : ''}
+                {extraction.aiModel ? ` (model: ${extraction.aiModel})` : ''}
+              </span>
+              <p className="mt-1">
+                Suggestions below come from a rule-based helper (not AI). You can also order manually
+                from the <a href="/retailer" className="underline font-medium">catalogue</a>.
+              </p>
+            </div>
+          )}
+
           {/* Extraction Confirmation Panel */}
           {extraction && (
             <div className="mt-6 flex flex-col gap-4 border-t border-border/80 pt-5">
@@ -196,8 +236,15 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
                           Parsed phrase: <code className="text-foreground font-semibold bg-muted/60 px-1 py-0.5 rounded">&ldquo;{item.rawLine}&rdquo;</code>
                         </span>
                         {item.matchedProduct && (
-                          <Badge variant="outline" className="border-primary/40 bg-primary/5 text-primary text-[10px] font-semibold">
-                            {Math.round(item.matchedProduct.confidence * 100)}% confidence
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] font-semibold py-0 px-1.5 ${
+                              item.requiresReview
+                                ? 'border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-400'
+                                : 'border-primary/40 bg-primary/5 text-primary'
+                            }`}
+                          >
+                            {item.matchedProduct.confidence}% confidence{item.requiresReview ? ' · needs review' : ''}
                           </Badge>
                         )}
                       </div>
@@ -222,21 +269,82 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
                             <input
                               type="number"
                               min={1}
-                              value={selected?.quantity ?? item.extractedQuantity}
-                              onChange={(e) =>
-                                setSelectedItems((prev) => ({
-                                  ...prev,
-                                  [idx]: {
-                                    productId: selected?.productId ?? item.matchedProduct!.productId,
-                                    quantity: Math.max(1, parseInt(e.target.value, 10) || 1),
-                                  },
-                                }))
-                              }
+                              value={lineQuantities[idx] ?? selected?.quantity ?? item.extractedQuantity}
+                              onChange={(e) => {
+                                const newQty = Math.max(1, parseInt(e.target.value, 10) || 1)
+                                setLineQuantities((prev) => ({ ...prev, [idx]: newQty }))
+                                if (item.requiresReview) {
+                                  // For unit-ambiguous items requiring review:
+                                  // Changing quantity must NOT automatically confirm the item,
+                                  // and changing quantity after confirmation invalidates the confirmation.
+                                  setSelectedItems((prev) => {
+                                    const next = { ...prev }
+                                    delete next[idx]
+                                    return next
+                                  })
+                                } else {
+                                  setSelectedItems((prev) => ({
+                                    ...prev,
+                                    [idx]: {
+                                      productId: selected?.productId ?? item.matchedProduct!.productId,
+                                      quantity: newQty,
+                                    },
+                                  }))
+                                }
+                              }}
                               className="w-16 rounded-lg border border-input bg-transparent p-1.5 text-center text-sm font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
                             />
                             <span className="font-semibold text-xs text-foreground uppercase">
-                              {item.extractedUnit}
+                              {item.matchedProduct.unit}
                             </span>
+                            {item.requiresReview && !selected && (
+                              <div className="flex items-center gap-1.5">
+                                {(lineQuantities[idx] ?? item.extractedQuantity) === item.extractedQuantity ? (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() =>
+                                      setSelectedItems((prev) => ({
+                                        ...prev,
+                                        [idx]: {
+                                          productId: item.matchedProduct!.productId,
+                                          quantity: item.extractedQuantity,
+                                        },
+                                      }))
+                                    }
+                                    className="h-7 text-xs border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300 hover:bg-amber-500/20"
+                                    data-testid={`accept-unit-${idx}`}
+                                  >
+                                    Accept {item.extractedQuantity} {item.matchedProduct.unit.toLowerCase()}
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() =>
+                                      setSelectedItems((prev) => ({
+                                        ...prev,
+                                        [idx]: {
+                                          productId: item.matchedProduct!.productId,
+                                          quantity: lineQuantities[idx] ?? item.extractedQuantity,
+                                        },
+                                      }))
+                                    }
+                                    className="h-7 text-xs border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300 hover:bg-amber-500/20"
+                                    data-testid={`confirm-unit-${idx}`}
+                                  >
+                                    Confirm {lineQuantities[idx] ?? item.extractedQuantity} {item.matchedProduct.unit}
+                                  </Button>
+                                )}
+                              </div>
+                            )}
+                            {selected && (
+                              <Badge className="bg-primary/10 text-primary border-primary/30 text-[10px] py-0 px-1.5">
+                                Confirmed
+                              </Badge>
+                            )}
                           </div>
                         </div>
                       ) : (
@@ -270,7 +378,7 @@ export function AiOrderModal({ onCartUpdated }: { onCartUpdated?: () => void }) 
                                   : 'border-border hover:border-primary/40 text-muted-foreground'
                               }`}
                             >
-                              {alt.name} ({Math.round(alt.confidence * 100)}%)
+                              {alt.name} ({alt.confidence}%)
                             </button>
                           ))}
                         </div>
