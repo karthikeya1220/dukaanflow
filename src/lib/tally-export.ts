@@ -26,8 +26,19 @@ export interface TallyCsvRow {
   netAmountRupees: string
 }
 
+/**
+ * Spreadsheet (Excel / Tally) formula-injection guard: values beginning with
+ * =, +, -, @ or a tab can execute as formulae when the CSV is opened in a
+ * spreadsheet. Standard mitigation is prefixing a single apostrophe, which
+ * spreadsheets treat as literal text.
+ */
+const FORMULA_PREFIXES = ['=', '+', '-', '@', '\t', '\r']
+
 function escapeCsvField(val: string | number): string {
-  const str = String(val)
+  let str = String(val)
+  if (FORMULA_PREFIXES.some((prefix) => str.startsWith(prefix))) {
+    str = `'${str}`
+  }
   if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
     return `"${str.replace(/"/g, '""')}"`
   }

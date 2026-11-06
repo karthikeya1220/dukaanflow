@@ -37,7 +37,13 @@ export async function sendMagicLink(
 }
 
 export async function signOut(): Promise<void> {
-  const supabase = await createClient()
-  await supabase.auth.signOut()
+  try {
+    const supabase = await createClient()
+    await supabase.auth.signOut()
+  } catch {
+    // Remote session may already be revoked (e.g. re-login elsewhere). Logout
+    // must still complete locally: clearing cookies happens in createClient's
+    // cookie handling and redirect below. Never block logout on provider errors.
+  }
   redirect('/login')
 }

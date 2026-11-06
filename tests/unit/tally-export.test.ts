@@ -60,5 +60,74 @@ describe('Tally CSV Export', () => {
     expect(lines[1]).toContain('ord-123')
     expect(lines[1]).toContain('22.00')
   })
+
+  it('neutralizes spreadsheet formula injection in text fields', () => {
+    const base: OrderView = {
+      id: 'ord-inject',
+      retailerId: 'ret-1',
+      retailerEmail: 'buyer@example.test',
+      cartId: 'cart-1',
+      idempotencyKey: 'idemp-1',
+      status: 'SUBMITTED',
+      submittedAt: new Date('2026-11-03T10:00:00.000Z'),
+      updatedAt: new Date('2026-11-03T10:00:00.000Z'),
+      reservationExpiresAt: new Date('2026-11-04T10:00:00.000Z'),
+      inventoryReleasedAt: null,
+      rejectionReason: null,
+      subtotalPaise: 100,
+      discountPaise: 0,
+      totalPaise: 100,
+      priceBasisConfirmed: true,
+      isSimulation: false,
+      reviewedByUserId: null,
+      lines: [],
+    }
+
+    const dangerous: { sku: string; productName: string }[] = [
+      { sku: 'SKU-A', productName: '=HYPERLINK("http://evil.test","pwned")' },
+      { sku: 'SKU-B', productName: '+SUM(1,2)' },
+      { sku: 'SKU-C', productName: '-1+CMD' },
+      { sku: 'SKU-D', productName: '@cmd' },
+      { sku: 'SKU-E', productName: '\tTABINJECT' },
+    ]
+
+    const csv = generateTallyCsvData([
+      {
+        ...base,
+        lines: dangerous.map((line, i) => ({
+          id: `l-${i}`,
+          productId: `p-${i}`,
+          sku: line.sku,
+          productName: line.productName,
+          paidQty: 1,
+          freeQty: 0,
+          reservedQty: 1,
+          sellingUnit: 'PACK' as const,
+          inventoryUnit: 'PACK' as const,
+          unitPricePaise: 100,
+          priceBasis: 'PER_PACK' as const,
+          grossPaise: 100,
+          discountPaise: 0,
+          totalPaise: 100,
+          schemeKind: null,
+          schemeId: null,
+        })),
+      },
+    ])
+
+    const dataRows = csv.split('\r\n').slice(1)
+    for (const row of dataRows) {
+      // The item-name column must never start with a dangerous character.
+      const nameField = row.split(',').find((field) => field.startsWith("'="))
+      expect(nameField ?? row).toMatch(/'/)
+    }
+    expect(csv).toContain("'=HYPERLINK")
+    expect(csv).toContain("'+SUM(1,2)")
+    expect(csv).toContain("'-1+CMD")
+    expect(csv).toContain("'@cmd")
+    expect(csv).toContain("'\tTABINJECT")
+    // Headers and monetary columns remain untouched.
+    expect(csv.split('\r\n')[0]).not.toContain("'Order")
+  })
 })
 

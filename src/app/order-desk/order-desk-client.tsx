@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { reviewOrder } from '@/app/actions/order'
-import { formatPaise } from '@/lib/catalogue-format'
+import { formatPaise, formatOrderDateTime, formatOrderTime } from '@/lib/catalogue-format'
 import type { OrderView } from '@/lib/order-service'
 import {
   FileSpreadsheet,
@@ -204,9 +204,9 @@ export function OrderDeskClient({
         <div className="flex flex-col gap-3 lg:col-span-5">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-              Orders Queue ({filteredOrders.length})
+              Queue Snapshot ({filteredOrders.length})
             </h2>
-            <span className="text-[11px] text-muted-foreground">Real-time incoming</span>
+            <span className="text-[11px] text-muted-foreground">Queue Snapshot</span>
           </div>
 
           {filteredOrders.length === 0 ? (
@@ -256,7 +256,7 @@ export function OrderDeskClient({
 
                     <div className="flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/50 pt-2 mt-1">
                       <span>{order.lines.length} line item{order.lines.length === 1 ? '' : 's'}</span>
-                      <span>{new Date(order.submittedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      <span>{formatOrderTime(order.submittedAt)}</span>
                     </div>
                   </button>
                 )
@@ -284,36 +284,45 @@ export function OrderDeskClient({
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Placed by <strong className="text-foreground">{activeOrder.retailerEmail}</strong> on {new Date(activeOrder.submittedAt).toLocaleString()}
+                    Placed by <strong className="text-foreground">{activeOrder.retailerEmail}</strong> on {formatOrderDateTime(activeOrder.submittedAt)}
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  {getStatusBadge(activeOrder.status)}
-                  {activeOrder.status === 'SUBMITTED' && (
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        disabled={isPending || !reviewPolicyEnabled}
-                        onClick={() => handleReview(activeOrder.id, 'APPROVED')}
-                        className="bg-emerald-600 hover:bg-emerald-700 h-8 text-xs font-medium gap-1 text-white shadow-xs"
-                        data-testid="order-approve-btn"
-                      >
-                        <Check className="h-3.5 w-3.5" />
-                        <span>Approve</span>
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        disabled={isPending || !reviewPolicyEnabled}
-                        onClick={() => handleReview(activeOrder.id, 'REJECTED')}
-                        className="h-8 text-xs font-medium gap-1 shadow-xs"
-                        data-testid="order-reject-btn"
-                      >
-                        <Ban className="h-3.5 w-3.5" />
-                        <span>Reject</span>
-                      </Button>
-                    </div>
+                <div className="flex flex-col sm:flex-row items-end sm:items-center gap-2">
+                  <div className="flex items-center gap-2">
+                    {getStatusBadge(activeOrder.status)}
+                    {activeOrder.status === 'SUBMITTED' && (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          disabled={isPending || !reviewPolicyEnabled}
+                          onClick={() => handleReview(activeOrder.id, 'APPROVED')}
+                          className="bg-emerald-600 hover:bg-emerald-700 h-8 text-xs font-medium gap-1 text-white shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={!reviewPolicyEnabled ? 'Approvals disabled pending distributor policy sign-off' : undefined}
+                          data-testid="order-approve-btn"
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                          <span>Approve</span>
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          disabled={isPending || !reviewPolicyEnabled}
+                          onClick={() => handleReview(activeOrder.id, 'REJECTED')}
+                          className="h-8 text-xs font-medium gap-1 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={!reviewPolicyEnabled ? 'Rejections disabled pending distributor policy sign-off' : undefined}
+                          data-testid="order-reject-btn"
+                        >
+                          <Ban className="h-3.5 w-3.5" />
+                          <span>Reject</span>
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                  {!reviewPolicyEnabled && activeOrder.status === 'SUBMITTED' && (
+                    <span className="text-[10px] text-muted-foreground font-medium italic">
+                      Actions locked (policy pending)
+                    </span>
                   )}
                 </div>
               </div>

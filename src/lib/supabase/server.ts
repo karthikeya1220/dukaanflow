@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { connection } from 'next/server'
 
 /**
  * Creates a Supabase server client for the current request.
@@ -22,6 +23,7 @@ function isCookieMutationError(err: unknown): err is Error {
   )
 }
 export async function createClient() {
+  await connection()
   const cookieStore = await cookies()
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

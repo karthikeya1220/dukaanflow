@@ -35,8 +35,8 @@ export default async function OrderDeskPage() {
 
           <div className="flex items-center gap-3">
             <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground shadow-2xs">
-              <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Live Queue Sync</span>
+              <span className="flex h-2 w-2 rounded-full bg-muted-foreground/60" />
+              <span>Queue Snapshot</span>
             </div>
 
             <form action={signOut}>
@@ -60,12 +60,12 @@ export default async function OrderDeskPage() {
           <div>
             <div className="flex items-center gap-2.5">
               <h1 className="text-2xl font-bold tracking-tight text-foreground">Order Desk</h1>
-              <Badge variant="outline" className="border-emerald-600/30 text-emerald-700 bg-emerald-500/10 font-semibold text-xs">
-                Live Operations
+              <Badge variant="outline" className="border-border text-muted-foreground bg-muted/40 font-semibold text-xs">
+                Operations Desk
               </Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Real-time distributor order queue, commercial audits, simulation isolation, and Tally ERP exports.
+              Distributor order queue, commercial audits, simulation isolation, and Tally ERP exports.
             </p>
           </div>
 

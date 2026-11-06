@@ -15,7 +15,8 @@ import { OrderStatus } from '@/generated/prisma/enums'
 
 const submitOrderSchema = z.object({
   idempotencyKey: z.string().min(1, 'Idempotency key required'),
-  isSimulation: z.boolean().optional(),
+  // NOTE: no `isSimulation` field — simulation status is decided server-side
+  // by which authorized server action is invoked, never by request parameters.
 })
 
 const updateOrderStatusSchema = z.object({
@@ -32,7 +33,28 @@ export type OrderListActionResult =
   | { ok: true; orders: OrderView[] }
   | { ok: false; code: string; message: string }
 
+/**
+ * Commercial order submission. Server actions alone decide simulation status:
+ * this path always submits a commercial order (isSimulation=false on the
+ * server), so a manipulated request can never mark itself as a simulation to
+ * bypass commercial policy gates.
+ */
 export async function submitOrder(input: unknown): Promise<OrderActionResult> {
+  return performRetailerSubmission(input, { isSimulation: false })
+}
+
+/**
+ * Simulation (demo) order submission. Only retailers, only this action —
+ * iSimulation=true is forced server-side.
+ */
+export async function submitSimulationOrder(input: unknown): Promise<OrderActionResult> {
+  return performRetailerSubmission(input, { isSimulation: true })
+}
+
+async function performRetailerSubmission(
+  input: unknown,
+  forced: { isSimulation: boolean },
+): Promise<OrderActionResult> {
   const user = await getCurrentUserWithRole()
   if (!user) {
     return { ok: false, code: 'UNAUTHORIZED', message: 'Sign in to submit an order' }
@@ -57,7 +79,8 @@ export async function submitOrder(input: unknown): Promise<OrderActionResult> {
   try {
     const order = await submitCartToOrder(dbUser.id, {
       idempotencyKey: parsed.data.idempotencyKey,
-      isSimulation: parsed.data.isSimulation,
+      // Server-decided; not influenced by any request field.
+      isSimulation: forced.isSimulation,
     })
     return { ok: true, order }
   } catch (error) {

@@ -1,12 +1,14 @@
 import { prisma } from '@/db'
 import { PriceBasis, ProductUnit, SchemeKind, OrderStatus } from '@/generated/prisma/enums'
 import { calculateLine } from '@/lib/cart-calculation'
+import { fingerprintCartLines } from '@/lib/cart-service'
 
 export type OrderServiceErrorCode =
   | 'UNAUTHORIZED'
   | 'FORBIDDEN'
   | 'CART_EMPTY'
   | 'CART_NOT_CONFIRMED'
+  | 'CART_CONTENTS_CHANGED'
   | 'PRICE_BASIS_UNCONFIRMED'
   | 'INSUFFICIENT_STOCK'
   | 'PRODUCT_UNAVAILABLE'
@@ -73,6 +75,80 @@ export interface OrderView {
   lines: OrderLineView[]
 }
 
+function mapOrderRow(order: {
+  id: string
+  retailerId: string
+  cartId: string
+  idempotencyKey: string
+  status: OrderStatus
+  submittedAt: Date
+  updatedAt: Date
+  reservationExpiresAt: Date
+  inventoryReleasedAt: Date | null
+  rejectionReason: string | null
+  reviewedByUserId: string | null
+  subtotalPaise: number
+  discountPaise: number
+  totalPaise: number
+  priceBasisConfirmed: boolean
+  isSimulation: boolean
+  lines: Array<{
+    id: string
+    productId: string | null
+    sku: string
+    productName: string
+    paidQty: number
+    freeQty: number
+    reservedQty: number
+    sellingUnit: ProductUnit
+    inventoryUnit: ProductUnit
+    unitPricePaise: number
+    priceBasis: PriceBasis
+    grossPaise: number
+    discountPaise: number
+    totalPaise: number
+    schemeKind: SchemeKind | null
+    schemeId: string | null
+  }>
+}): OrderView {
+  return {
+    id: order.id,
+    retailerId: order.retailerId,
+    cartId: order.cartId,
+    idempotencyKey: order.idempotencyKey,
+    status: order.status,
+    submittedAt: order.submittedAt,
+    updatedAt: order.updatedAt,
+    reservationExpiresAt: order.reservationExpiresAt,
+    inventoryReleasedAt: order.inventoryReleasedAt,
+    rejectionReason: order.rejectionReason,
+    reviewedByUserId: order.reviewedByUserId,
+    subtotalPaise: order.subtotalPaise,
+    discountPaise: order.discountPaise,
+    totalPaise: order.totalPaise,
+    priceBasisConfirmed: order.priceBasisConfirmed,
+    isSimulation: order.isSimulation,
+    lines: order.lines.map((l) => ({
+      id: l.id,
+      productId: l.productId,
+      sku: l.sku,
+      productName: l.productName,
+      paidQty: l.paidQty,
+      freeQty: l.freeQty,
+      reservedQty: l.reservedQty,
+      sellingUnit: l.sellingUnit,
+      inventoryUnit: l.inventoryUnit,
+      unitPricePaise: l.unitPricePaise,
+      priceBasis: l.priceBasis,
+      grossPaise: l.grossPaise,
+      discountPaise: l.discountPaise,
+      totalPaise: l.totalPaise,
+      schemeKind: l.schemeKind,
+      schemeId: l.schemeId,
+    })),
+  }
+}
+
 /**
  * Checks whether commercial order submission is explicitly enabled by the distributor.
  * In DukaanFlow, until distributor approves inventory reservation and pricing authority policies,
@@ -97,8 +173,10 @@ export function isOrderReviewPolicyEnabled(): boolean {
  * 1. If not isSimulation, checks commercial submission gate (blocked if inventory policy unapproved).
  * 2. If not isSimulation, UNCONFIRMED price basis is strictly blocked.
  * 3. Simulation orders are explicitly marked with isSimulation=true.
- * 4. Idempotency is enforced per retailer.
+ * 4. Idempotency is enforced per retailer, atomically inside the submit transaction.
  * 5. Carts transition to SUBMITTED atomically.
+ * 6. The confirmed-fingerprint recorded at cart confirmation is re-verified against
+ *    the live cart contents; modified or stale carts are rejected (CART_CONTENTS_CHANGED).
  */
 export async function submitCartToOrder(
   retailerId: string,
@@ -118,44 +196,24 @@ export async function submitCartToOrder(
     )
   }
 
-  // Check if order with this idempotency key already exists for this retailer
-  const existingOrder = await prisma.order.findUnique({
-    where: {
-      retailerId_idempotencyKey: {
-        retailerId,
-        idempotencyKey,
-      },
-    },
-    include: {
-      lines: { orderBy: { id: 'asc' } },
-    },
-  })
-
-  if (existingOrder) {
-    return {
-      ...existingOrder,
-      lines: existingOrder.lines.map((l) => ({
-        id: l.id,
-        productId: l.productId,
-        sku: l.sku,
-        productName: l.productName,
-        paidQty: l.paidQty,
-        freeQty: l.freeQty,
-        reservedQty: l.reservedQty,
-        sellingUnit: l.sellingUnit,
-        inventoryUnit: l.inventoryUnit,
-        unitPricePaise: l.unitPricePaise,
-        priceBasis: l.priceBasis,
-        grossPaise: l.grossPaise,
-        discountPaise: l.discountPaise,
-        totalPaise: l.totalPaise,
-        schemeKind: l.schemeKind,
-        schemeId: l.schemeId,
-      })),
-    }
-  }
-
   return prisma.$transaction(async (tx) => {
+    // Idempotency check inside the transaction: a retry (cart already SUBMITTED)
+    // or a concurrent duplicate returns the original order instead of failing.
+    const existingOrder = await tx.order.findUnique({
+      where: {
+        retailerId_idempotencyKey: {
+          retailerId,
+          idempotencyKey,
+        },
+      },
+      include: {
+        lines: { orderBy: { id: 'asc' } },
+      },
+    })
+    if (existingOrder) {
+      return mapOrderRow(existingOrder)
+    }
+
     // Lock and fetch retailer's CONFIRMED cart
     const cart = await tx.cart.findFirst({
       where: {
@@ -179,6 +237,21 @@ export async function submitCartToOrder(
       throw new OrderServiceError(
         'CART_NOT_CONFIRMED',
         'No confirmed cart found to submit. Please review and confirm your cart.',
+      )
+    }
+
+    // Verify cart contents have not drifted since the retailer confirmed them.
+    if (!cart.confirmedFingerprint) {
+      throw new OrderServiceError(
+        'CART_CONTENTS_CHANGED',
+        'Cart has no confirmation fingerprint; confirm the cart again before submitting.',
+      )
+    }
+    const currentFingerprint = fingerprintCartLines(cart.lines)
+    if (currentFingerprint !== cart.confirmedFingerprint) {
+      throw new OrderServiceError(
+        'CART_CONTENTS_CHANGED',
+        'Cart contents changed after confirmation (prices, schemes, stock or lines). Review and confirm the cart again.',
       )
     }
 
@@ -296,8 +369,13 @@ export async function submitCartToOrder(
     const reservationExpiresAt = new Date(Date.now() + ttlHours * 60 * 60 * 1000)
     const submittedAt = new Date()
 
-    // Create Order with explicit isSimulation flag
-    const createdOrder = await tx.order.create({
+    // Idempotent create: rely on the unique (retailerId, idempotencyKey) index.
+    // On a duplicate (retry / double-click) we fetch and return the original order
+    // instead of creating a second one — the uniqueness is now defense in depth
+    // inside the same transaction.
+    let createdOrder
+    try {
+      createdOrder = await tx.order.create({
       data: {
         retailerId,
         cartId: cart.id,
@@ -317,7 +395,25 @@ export async function submitCartToOrder(
       include: {
         lines: { orderBy: { id: 'asc' } },
       },
-    })
+      })
+    } catch (error) {
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'P2002'
+      ) {
+        // Concurrent duplicate submission: return the already-created order.
+        const existing = await tx.order.findUnique({
+          where: { retailerId_idempotencyKey: { retailerId, idempotencyKey } },
+          include: { lines: { orderBy: { id: 'asc' } } },
+        })
+        if (existing) {
+          return mapOrderRow(existing)
+        }
+      }
+      throw error
+    }
 
     // Mark Cart as SUBMITTED
     await tx.cart.update({
@@ -328,42 +424,7 @@ export async function submitCartToOrder(
       },
     })
 
-    return {
-      id: createdOrder.id,
-      retailerId: createdOrder.retailerId,
-      cartId: createdOrder.cartId,
-      idempotencyKey: createdOrder.idempotencyKey,
-      status: createdOrder.status,
-      submittedAt: createdOrder.submittedAt,
-      updatedAt: createdOrder.updatedAt,
-      reservationExpiresAt: createdOrder.reservationExpiresAt,
-      inventoryReleasedAt: createdOrder.inventoryReleasedAt,
-      rejectionReason: createdOrder.rejectionReason,
-      reviewedByUserId: createdOrder.reviewedByUserId,
-      subtotalPaise: createdOrder.subtotalPaise,
-      discountPaise: createdOrder.discountPaise,
-      totalPaise: createdOrder.totalPaise,
-      priceBasisConfirmed: createdOrder.priceBasisConfirmed,
-      isSimulation: createdOrder.isSimulation,
-      lines: createdOrder.lines.map((l) => ({
-        id: l.id,
-        productId: l.productId,
-        sku: l.sku,
-        productName: l.productName,
-        paidQty: l.paidQty,
-        freeQty: l.freeQty,
-        reservedQty: l.reservedQty,
-        sellingUnit: l.sellingUnit,
-        inventoryUnit: l.inventoryUnit,
-        unitPricePaise: l.unitPricePaise,
-        priceBasis: l.priceBasis,
-        grossPaise: l.grossPaise,
-        discountPaise: l.discountPaise,
-        totalPaise: l.totalPaise,
-        schemeKind: l.schemeKind,
-        schemeId: l.schemeId,
-      })),
-    }
+    return mapOrderRow(createdOrder)
   })
 }
 
@@ -546,75 +607,61 @@ export async function updateOrderStatus(
     )
   }
 
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: {
-      lines: true,
-      retailer: { select: { email: true } },
-    },
+  const orderView = await prisma.$transaction(async (tx) => {
+    const existing = await tx.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, status: true },
+    })
+
+    if (!existing) {
+      throw new OrderServiceError('ORDER_NOT_FOUND', 'Order not found')
+    }
+
+    if (existing.status !== OrderStatus.SUBMITTED) {
+      throw new OrderServiceError(
+        'INVALID_STATUS_TRANSITION',
+        `Order is already ${existing.status} and cannot be transitioned to ${newStatus}`,
+      )
+    }
+
+    // Atomic guarded transition: the status precondition lives in the UPDATE
+    // itself, so two concurrent reviewers can never both apply a transition.
+    // NOTE: no inventory release is performed — DukaanFlow performs no stock
+    // reservations in v1 (see docs/TDD.md).
+    const updatedCount = await tx.order.updateMany({
+      where: { id: orderId, status: OrderStatus.SUBMITTED },
+      data: {
+        status: newStatus,
+        rejectionReason:
+          newStatus === OrderStatus.REJECTED
+            ? (options?.rejectionReason ?? 'Rejected by Order Desk')
+            : null,
+        reviewedByUserId: reviewerUserId,
+      },
+    })
+
+    if (updatedCount.count !== 1) {
+      throw new OrderServiceError(
+        'INVALID_STATUS_TRANSITION',
+        'Order was reviewed concurrently; refresh and retry',
+      )
+    }
+
+    return tx.order.findUnique({
+      where: { id: orderId },
+      include: {
+        retailer: { select: { email: true } },
+        lines: { orderBy: { id: 'asc' } },
+      },
+    })
   })
 
-  if (!order) {
+  if (!orderView) {
     throw new OrderServiceError('ORDER_NOT_FOUND', 'Order not found')
   }
 
-  if (order.status !== OrderStatus.SUBMITTED) {
-    throw new OrderServiceError(
-      'INVALID_STATUS_TRANSITION',
-      `Order is already ${order.status} and cannot be transitioned to ${newStatus}`,
-    )
-  }
-
-  const updated = await prisma.order.update({
-    where: { id: orderId },
-    data: {
-      status: newStatus,
-      rejectionReason:
-        newStatus === OrderStatus.REJECTED ? (options?.rejectionReason ?? 'Rejected by Order Desk') : null,
-      inventoryReleasedAt: newStatus === OrderStatus.REJECTED ? new Date() : null,
-      reviewedByUserId: reviewerUserId,
-    },
-    include: {
-      retailer: { select: { email: true } },
-      lines: { orderBy: { id: 'asc' } },
-    },
-  })
-
   return {
-    id: updated.id,
-    retailerId: updated.retailerId,
-    retailerEmail: updated.retailer.email,
-    cartId: updated.cartId,
-    idempotencyKey: updated.idempotencyKey,
-    status: updated.status,
-    submittedAt: updated.submittedAt,
-    updatedAt: updated.updatedAt,
-    reservationExpiresAt: updated.reservationExpiresAt,
-    inventoryReleasedAt: updated.inventoryReleasedAt,
-    rejectionReason: updated.rejectionReason,
-    reviewedByUserId: updated.reviewedByUserId,
-    subtotalPaise: updated.subtotalPaise,
-    discountPaise: updated.discountPaise,
-    totalPaise: updated.totalPaise,
-    priceBasisConfirmed: updated.priceBasisConfirmed,
-    isSimulation: updated.isSimulation,
-    lines: updated.lines.map((l) => ({
-      id: l.id,
-      productId: l.productId,
-      sku: l.sku,
-      productName: l.productName,
-      paidQty: l.paidQty,
-      freeQty: l.freeQty,
-      reservedQty: l.reservedQty,
-      sellingUnit: l.sellingUnit,
-      inventoryUnit: l.inventoryUnit,
-      unitPricePaise: l.unitPricePaise,
-      priceBasis: l.priceBasis,
-      grossPaise: l.grossPaise,
-      discountPaise: l.discountPaise,
-      totalPaise: l.totalPaise,
-      schemeKind: l.schemeKind,
-      schemeId: l.schemeId,
-    })),
+    ...mapOrderRow(orderView),
+    retailerEmail: orderView.retailer.email,
   }
 }
