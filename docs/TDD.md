@@ -115,12 +115,11 @@ Rule 14: every assumption is recorded here. Status: M0.
 ## Production Readiness & Operations (Added M7 Refinement)
 
 ### Environment Variables
-- `DATABASE_URL`: Pooled connection string to Postgres (Port 6543 on Supabase / PgBouncer).
-- `DIRECT_URL`: Direct port 5432 string for DDL migrations.
+- `DATABASE_URL`: Connection string to Postgres used by Prisma ORM and the `@prisma/adapter-pg` driver adapter. For Vercel Serverless runtime, use the Supabase Transaction Pooler (port 6543, `?pgbouncer=true`). For running CLI migrations (`npx prisma migrate deploy`), point `DATABASE_URL` to the direct database connection (port 5432) or Session Pooler (port 5432). Note: Prisma 7 CLI configuration (`prisma7.config.ts`) reads `process.env["DATABASE_URL"]`.
 - `NEXT_PUBLIC_SUPABASE_URL`: Public Supabase API URL.
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Public anonymous key.
-- `SUPABASE_SERVICE_ROLE_KEY`: Elevated administrative key used strictly for seed scripts.
-- `SITE_URL`: Application origin (e.g. `https://dukaanflow.vercel.app`).
+- `SUPABASE_SERVICE_ROLE_KEY`: Elevated administrative key used strictly for seed scripts. Never exposed to browser or runtime Vercel variables.
+- `SITE_URL`: Application origin (e.g. `https://dukaanflow.vercel.app`). Server-only runtime variable used to construct magic link callback URLs and redirect targets.
 - `AI_API_KEY`: OpenRouter server API key (optional; defaults to rule engine if empty).
 - `AI_MODEL`: Router model name (`openrouter/free`).
 - `ENABLE_COMMERCIAL_SUBMISSION`: Feature flag for commercial orders (default: `false`).

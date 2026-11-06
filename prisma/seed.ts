@@ -4,6 +4,11 @@
 //   2. Upsert the public.users row keyed on the Auth uid (authSubject).
 // Run: npm run db:seed
 import "dotenv/config";
+import { assertSafeSeedEnvironment } from "../src/lib/seed-safety";
+
+// Production Safeguard: Run guard before database connection or Auth imports
+assertSafeSeedEnvironment();
+
 import { prisma } from "../src/db";
 import { z } from "zod";
 
@@ -510,6 +515,8 @@ async function createAuthUser(email: string): Promise<string> {
 }
 
 async function main() {
+  assertSafeSeedEnvironment();
+
   for (const demo of DEMO_USERS) {
     let authId = await findAuthUser(demo.email);
     const existed = authId !== null;
