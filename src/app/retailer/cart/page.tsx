@@ -5,6 +5,7 @@ import { prisma } from '@/db'
 import { StorefrontHeader } from '@/components/storefront-header'
 import { CartClient } from './cart-client'
 import { getCartForRetailer } from '@/lib/cart-service'
+import { ArrowLeft } from 'lucide-react'
 
 export const instant = false
 
@@ -13,22 +14,24 @@ export default async function RetailerCartPage() {
   const currentUser = await getCurrentUserWithRole()
   const retailer = currentUser
     ? await prisma.user.findUnique({
-        where: { authSubject: currentUser.user.id },
-        select: { id: true },
-      })
+      where: { authSubject: currentUser.user.id },
+      select: { id: true },
+    })
     : null
   const cart = retailer ? (await getCartForRetailer(retailer.id)).view : null
+  const cartItemCount = cart?.lines.length ?? 0
 
   return (
-    <div className="min-h-screen bg-background">
-      <StorefrontHeader email={user.email} active="cart" />
+    <div className="min-h-screen bg-muted/15 font-sans">
+      <StorefrontHeader email={user.email} cartCount={cartItemCount} active="cart" />
 
-      <main className="mx-auto w-full max-w-3xl px-4 py-6 lg:px-6">
+      <main className="mx-auto w-full max-w-5xl px-4 py-6 sm:py-8 lg:px-6 flex flex-col gap-4">
         <Link
           href="/retailer"
-          className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground w-fit"
         >
-          ← Back to catalogue
+          <ArrowLeft className="h-3.5 w-3.5" />
+          <span>Back to catalogue</span>
         </Link>
 
         <CartClient initialCart={cart} />

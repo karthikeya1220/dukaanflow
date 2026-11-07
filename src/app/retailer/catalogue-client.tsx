@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { formatPaise, formatScheme, formatUnit } from '@/lib/catalogue-format'
 import type { CartActionResult } from '@/app/actions/cart'
-import { Minus, Plus, ShoppingCart } from 'lucide-react'
+import { Minus, Plus, ShoppingCart, Check, AlertCircle, Package, Sparkles } from 'lucide-react'
 
 type CatalogueProduct = {
   id: string
@@ -28,7 +28,7 @@ type CatalogueProduct = {
   }>
 }
 
-/** ecomcn-style stepper: compact, hairline, disabled when out of stock. */
+/** Linear-style quantity stepper: tactile 32px height, touch-safe, tabular numbers. */
 function QuantityStepper({
   value,
   onChange,
@@ -41,11 +41,11 @@ function QuantityStepper({
   labelId: string
 }) {
   return (
-    <div className="inline-flex h-8 items-center rounded-md border border-input bg-transparent">
+    <div className="inline-flex h-9 items-center rounded-lg border border-border bg-background shadow-2xs">
       <button
         type="button"
         aria-label="Decrease quantity"
-        className="flex h-8 w-8 items-center justify-center rounded-l-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        className="flex h-9 w-8 items-center justify-center rounded-l-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:scale-95 disabled:pointer-events-none disabled:opacity-30"
         disabled={disabled || value <= 1}
         onClick={() => onChange(value - 1)}
       >
@@ -65,12 +65,12 @@ function QuantityStepper({
           const next = Number(event.target.value)
           if (Number.isInteger(next) && next > 0) onChange(next)
         }}
-        className="h-8 w-10 border-x border-input bg-transparent text-center text-sm tabular-nums outline-none [appearance:textfield] disabled:opacity-50 [&::-webkit-inner-spin-button]:appearance-none"
+        className="h-9 w-11 border-x border-border bg-transparent text-center text-xs font-semibold tabular-nums outline-none [appearance:textfield] disabled:opacity-50 [&::-webkit-inner-spin-button]:appearance-none"
       />
       <button
         type="button"
         aria-label="Increase quantity"
-        className="flex h-8 w-8 items-center justify-center rounded-r-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+        className="flex h-9 w-8 items-center justify-center rounded-r-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:scale-95 disabled:pointer-events-none disabled:opacity-30"
         disabled={disabled}
         onClick={() => onChange(value + 1)}
       >
@@ -90,6 +90,7 @@ export function CatalogueProducts({
 }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const [isPending, startTransition] = useTransition()
+  const [addingId, setAddingId] = useState<string | null>(null)
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
@@ -106,6 +107,7 @@ export function CatalogueProducts({
   function addProduct(productId: string, productName: string) {
     const quantity = quantities[productId] ?? 1
     setFeedback(null)
+    setAddingId(productId)
     startTransition(async () => {
       try {
         const result: CartActionResult = await addProductAction({ productId, quantity })
@@ -117,96 +119,129 @@ export function CatalogueProducts({
         }
       } catch {
         setFeedback({ type: 'error', message: 'Unable to update the cart.' })
+      } finally {
+        setAddingId(null)
       }
     })
   }
 
   return (
-    <div ref={rootRef} data-testid="catalogue-client" className="flex flex-col">
+    <div ref={rootRef} data-testid="catalogue-client" className="flex flex-col gap-4">
+      {/* Dynamic Feedback Toast */}
       <div aria-live="polite" className="min-h-5 text-xs">
         {feedback?.type === 'success' && (
-          <p className="flex items-center gap-1.5 rounded-md border border-border bg-muted/50 p-2.5 text-muted-foreground">
-            {feedback.message}
-            <Link href="/retailer/cart" className="ml-auto font-medium text-foreground underline underline-offset-2">
-              View cart
+          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-emerald-900 dark:text-emerald-200 animate-in fade-in-50">
+            <Check className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            <span className="font-medium">{feedback.message}</span>
+            <Link
+              href="/retailer/cart"
+              className="ml-auto font-semibold text-emerald-700 dark:text-emerald-300 underline underline-offset-4 hover:text-emerald-800"
+            >
+              View cart &rarr;
             </Link>
-          </p>
+          </div>
         )}
         {feedback?.type === 'error' && (
-          <p role="alert" className="flex items-center gap-1.5 rounded-md border border-destructive/30 bg-destructive/10 p-2.5 text-destructive">
-            {feedback.message}
-          </p>
+          <div
+            role="alert"
+            className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-destructive animate-in fade-in-50"
+          >
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span className="font-medium">{feedback.message}</span>
+          </div>
         )}
       </div>
 
       {products.length === 0 ? (
-        <div className="mt-4 rounded-md border border-dashed border-border px-6 py-16 text-center">
-          <p className="text-sm font-medium text-foreground">No products match your filters</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Try clearing your search terms or widening the stock, scheme or unit filters.
+        <div className="rounded-2xl border border-dashed border-border bg-card p-12 text-center shadow-xs">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+            <Package className="h-6 w-6" />
+          </div>
+          <h3 className="mt-4 text-base font-semibold text-foreground">No products match your filters</h3>
+          <p className="mt-1 text-xs text-muted-foreground max-w-sm mx-auto">
+            Try clearing search keywords, adjusting the stock availability filter, or resetting unit criteria.
           </p>
-          <Button asChild variant="outline" size="sm" className="mt-4">
-            <Link href="/retailer">Reset filters</Link>
+          <Button asChild variant="outline" size="sm" className="mt-5 rounded-lg shadow-2xs">
+            <Link href="/retailer">Clear all filters</Link>
           </Button>
         </div>
       ) : (
-        <div className="mt-2 grid gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {products.map((product) => {
             const quantity = quantities[product.id] ?? 1
             const isOutOfStock = product.inventoryQty === 0
+            const isLowStock = product.inventoryQty > 0 && product.inventoryQty <= 15
             const scheme = product.schemes[0]
+            const isAdding = addingId === product.id && isPending
 
             return (
-              <article key={product.sku} className="flex flex-col justify-between bg-card p-4 transition-colors hover:bg-muted/15">
+              <article
+                key={product.sku}
+                className="group relative flex flex-col justify-between rounded-xl border border-border bg-card p-4 sm:p-5 shadow-2xs transition-all duration-200 hover:border-primary/40 hover:shadow-sm"
+              >
                 <div>
-                  <div className="flex items-start justify-between gap-2.5">
-                    <h3 className="text-sm font-semibold leading-snug text-foreground">
+                  {/* Top: Name & SKU Badge */}
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="text-sm font-semibold leading-snug text-foreground group-hover:text-primary transition-colors">
                       {product.name}
                     </h3>
-                    <span className="shrink-0 rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground border border-border/50">
+                    <span className="shrink-0 rounded-md bg-muted px-2 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground border border-border">
                       {product.sku}
                     </span>
                   </div>
 
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-                    <span>
+                  {/* Pack Configuration & Stock Status */}
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                    <span className="font-medium">
                       {product.packSize} {formatUnit(product.packUnit)} / {formatUnit(product.sellingUnit).toLowerCase()}
                     </span>
-                    <span className="text-muted-foreground/40">·</span>
+                    <span className="text-muted-foreground/30">•</span>
                     {isOutOfStock ? (
-                      <span className="font-medium text-destructive">Out of stock</span>
+                      <span className="inline-flex items-center gap-1 font-semibold text-destructive">
+                        <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+                        Out of stock
+                      </span>
+                    ) : isLowStock ? (
+                      <span className="inline-flex items-center gap-1 font-semibold text-amber-700 dark:text-amber-400">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                        {product.inventoryQty} {formatUnit(product.inventoryUnit).toLowerCase()} left
+                      </span>
                     ) : (
-                      <span className="font-medium text-foreground/80">
+                      <span className="inline-flex items-center gap-1 font-medium text-emerald-700 dark:text-emerald-400">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
                         {product.inventoryQty} {formatUnit(product.inventoryUnit).toLowerCase()} in stock
                       </span>
                     )}
                   </div>
 
+                  {/* Price Row */}
                   <div className="mt-3 flex items-baseline gap-2">
-                    <span className="text-base font-bold tabular-nums text-foreground tracking-tight">
+                    <span className="text-lg font-bold tabular-nums tracking-tight text-foreground">
                       {formatPaise(product.pricePaise)}
                     </span>
-                    <span className="text-[11px] text-muted-foreground">
+                    <span className="text-xs text-muted-foreground font-medium">
                       / {formatUnit(product.sellingUnit).toLowerCase()}
                     </span>
                     {product.priceBasis === 'UNCONFIRMED' && (
-                      <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-300 border border-amber-500/20">
+                      <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:text-amber-300 border border-amber-500/30">
                         unconfirmed
                       </span>
                     )}
                   </div>
 
-                  {scheme ? (
-                    <div className="mt-2.5 rounded-md border border-primary/20 bg-primary/5 px-2.5 py-1 text-xs text-primary font-medium flex items-center gap-1.5">
-                      <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
-                      <span>{formatScheme(scheme, product.sellingUnit)}</span>
-                    </div>
-                  ) : (
-                    <div className="mt-2.5 h-6" aria-hidden="true" />
-                  )}
+                  {/* Scheme Callout */}
+                  <div className="mt-3 min-h-[30px]">
+                    {scheme ? (
+                      <div className="inline-flex items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-1 text-xs font-semibold text-primary">
+                        <Sparkles className="h-3 w-3 shrink-0" />
+                        <span>{formatScheme(scheme, product.sellingUnit)}</span>
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
 
-                <div className="mt-4 flex items-center justify-between gap-2 border-t border-border/60 pt-3">
+                {/* Footer: Stepper + Add Button */}
+                <div className="mt-4 flex items-center justify-between gap-3 border-t border-border/60 pt-3">
                   <QuantityStepper
                     labelId={`quantity-${product.sku}`}
                     value={quantity}
@@ -218,17 +253,18 @@ export function CatalogueProducts({
                     }
                     disabled={isOutOfStock}
                   />
+
                   <Button
                     type="button"
                     size="sm"
-                    variant="outline"
-                    className="h-8 min-w-24 font-medium"
+                    variant={isOutOfStock ? 'outline' : 'default'}
+                    className="h-9 min-w-[90px] font-semibold shadow-2xs gap-1.5"
                     onClick={() => addProduct(product.id, product.name)}
-                    disabled={isPending}
+                    disabled={isPending || isOutOfStock}
                     data-testid={`add-to-cart-${product.sku}`}
                   >
                     <ShoppingCart className="h-3.5 w-3.5" />
-                    <span>{isPending ? 'Adding…' : 'Add'}</span>
+                    <span>{isAdding ? 'Adding…' : 'Add'}</span>
                   </Button>
                 </div>
               </article>
