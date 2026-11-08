@@ -260,7 +260,7 @@ export function CatalogueProducts({
                     variant={isOutOfStock ? 'outline' : 'default'}
                     className="h-9 min-w-[90px] font-semibold shadow-2xs gap-1.5"
                     onClick={() => addProduct(product.id, product.name)}
-                    disabled={isPending || isOutOfStock}
+                    disabled={isPending}
                     data-testid={`add-to-cart-${product.sku}`}
                   >
                     <ShoppingCart className="h-3.5 w-3.5" />

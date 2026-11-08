@@ -88,7 +88,7 @@ function CartLineCard({
               <>
                 <span className="text-muted-foreground/30">•</span>
                 <span className="inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 font-semibold text-primary text-[11px]">
-                  +{calculation.freeQty} Free Scheme
+                  Free: {calculation.freeQty}
                 </span>
               </>
             )}
@@ -418,7 +418,7 @@ export function CartClient({ initialCart }: { initialCart: CartView | null }) {
                   </dd>
                 </div>
                 <div className="flex items-baseline justify-between border-t border-border pt-3">
-                  <dt className="text-sm font-bold text-foreground">Provisional Total</dt>
+                  <dt className="text-sm font-bold text-foreground">Provisional total</dt>
                   <dd className="text-lg font-extrabold tabular-nums text-foreground">
                     {formatPaise(cart.calculation.totalPaise)}
                   </dd>

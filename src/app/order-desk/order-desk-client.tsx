@@ -134,7 +134,6 @@ export function OrderDeskClient({
       {/* Policy Notice if disabled */}
       {!reviewPolicyEnabled && (
         <div
-          role="note"
           className="rounded-2xl border border-amber-300/80 bg-amber-500/10 p-4 text-xs text-amber-900 dark:border-amber-800/50 dark:bg-amber-950/20 dark:text-amber-200 flex items-start gap-3 shadow-2xs"
         >
           <ShieldAlert className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
